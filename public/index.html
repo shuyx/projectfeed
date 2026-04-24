@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="icon" href="/icon-192.png">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=1.16.1">
 </head>
 <body>
 
@@ -324,9 +324,9 @@
 
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+      window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js?v=1.16.1').catch(() => {}); });
     }
   </script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=1.16.1"></script>
 </body>
 </html>
