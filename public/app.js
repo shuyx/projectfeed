@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.5 · profile card (project baseline · pinned top)
+// projectfeed app.js — v1.6 · markdown render for all cards (was summary-only)
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -318,7 +318,7 @@ function renderKnowledgeCard(k) {
         <span class="knowledge-caret">▸</span>
       </button>
       <div class="knowledge-card-body" hidden>
-        <div>${highlightContent(k.content)}</div>
+        <div>${applyInlineHighlights(renderMarkdown(k.content))}</div>
         <div class="knowledge-card-foot">
           <span>🤖 AI · ${formatCardDateTime(k.created_at)}</span>
           <button class="knowledge-delete" aria-label="删除知识卡">✕</button>
@@ -416,7 +416,7 @@ function renderFeed() {
               ${!isSuggestion ? '<button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>' : ''}
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
-            <div class="note-body">${(isSummary || isSuggestion) ? applyInlineHighlights(renderMarkdown(n.content)) : highlightContent(n.content)}</div>
+            <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
             <div class="note-foot">
               <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
               ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
