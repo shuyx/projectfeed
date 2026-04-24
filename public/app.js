@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.0 · Personal Portfolio tracker (no auth)
+// projectfeed app.js — v1.1 · fix renderTabs residue + restore about modal
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -153,11 +153,6 @@ function renderTabs() {
     }
   }
   el.innerHTML = html;
-  el.querySelectorAll('.tab').forEach(btn => {
-    const active = p.id === state.currentTab ? ' active' : '';
-    const label = (p.emoji ? p.emoji + ' ' : '') + escapeHtml(p.name);
-    return `<button class="tab${active}" role="tab" data-id="${escapeHtml(p.id)}">${label}</button>`;
-  }).join('');
   el.querySelectorAll('.tab').forEach(btn => {
     btn.addEventListener('click', async () => {
       state.currentTab = btn.dataset.id;
@@ -1121,6 +1116,46 @@ function renderMarkdown(md) {
   return html;
 }
 
+// ---------- About / Settings modal (info-only) ----------
+function setupSettings() {
+  $('btn-settings')?.addEventListener('click', openSettings);
+  $('settings-close')?.addEventListener('click', closeSettings);
+  $('settings-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSettings();
+  });
+}
+
+function openSettings() {
+  renderAboutProjects();
+  $('settings-modal').hidden = false;
+}
+function closeSettings() {
+  $('settings-modal').hidden = true;
+}
+function renderAboutProjects() {
+  const el = $('about-projects');
+  const cnt = $('about-project-count');
+  if (!el) return;
+  if (cnt) cnt.textContent = state.projects.length;
+  const byPrio = {};
+  for (const p of state.projects) {
+    const k = p.priority || 'P2';
+    (byPrio[k] = byPrio[k] || []).push(p);
+  }
+  const order = ['P0', 'P1', 'P2', 'continuous'];
+  const labelMap = { P0: 'P0', P1: 'P1', P2: 'P2', continuous: '持续' };
+  let html = '';
+  for (const k of order) {
+    const arr = byPrio[k];
+    if (!arr || !arr.length) continue;
+    html += `<li class="about-prio-head"><span class="muted small">${labelMap[k]}</span></li>`;
+    for (const p of arr) {
+      html += `<li><span>${p.emoji ? p.emoji + ' ' : ''}${escapeHtml(p.name)} <span class="muted tiny">(${escapeHtml(p.id)})</span></span></li>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
 // ---------- Header / Summary projects ----------
 function renderSumProjects() {
   const el = $('sum-projects-list');
@@ -1166,6 +1201,7 @@ document.addEventListener('DOMContentLoaded', () => {
   try {
     setupComposer();
     setupSummarize();
+    setupSettings();
     setupChat();
     $('btn-refresh')?.addEventListener('click', refresh);
   } catch (e) {
