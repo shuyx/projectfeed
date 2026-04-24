@@ -1808,6 +1808,7 @@ async function runSummarize() {
     const data = await api('/api/summarize', {
       method: 'POST',
       body: JSON.stringify({ timeRange, project, tag_filter, include_progress, include_knowledge, generate_suggestion }),
+      timeoutMs: LLM_TIMEOUT_MS,  // v1.16.9 · 一键整理必须走 60s 超时
     });
     lastSummary = { ...data, timeRange, project };
     $('sum-loading').hidden = true;

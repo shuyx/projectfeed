@@ -907,16 +907,26 @@ input, textarea {
   gap: 10px;
   padding: 10px 12px;
   background: var(--surface-2);
+  border: 1px solid transparent;
   border-radius: var(--r-md);
   margin-bottom: 6px;
   cursor: pointer;
-  transition: background .15s ease;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 .radio-row:hover { background: var(--accent-soft); }
-.radio-row input[type=radio] {
+.radio-row input[type=radio],
+.radio-row input[type=checkbox] {
   accent-color: var(--accent);
   width: 16px;
   height: 16px;
+}
+/* v1.16.9 · 选中态整行高亮（每组独立 radio，不同维度可各自高亮） */
+.radio-row:has(input[type=radio]:checked),
+.radio-row:has(input[type=checkbox]:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  font-weight: 600;
 }
 
 .loading-box {
