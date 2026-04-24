@@ -1785,3 +1785,64 @@ kbd {
   padding-top: 6px;
   margin-top: 4px;
 }
+
+/* ============================================================
+   v1.8 · Profile card collapsible (default collapsed)
+   ============================================================ */
+.note.is-profile.profile-collapsed {
+  /* 折叠态更紧凑 */
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sys);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: inherit;
+}
+.profile-head:hover { background: rgba(59, 130, 246, 0.05); }
+.profile-head:active { background: rgba(59, 130, 246, 0.1); }
+.profile-head .profile-badge { flex-shrink: 0; }
+.profile-title {
+  flex: 1;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-caret {
+  flex-shrink: 0;
+  color: var(--muted-2);
+  font-size: 12px;
+  transition: transform 0.18s ease;
+  display: inline-block;
+}
+.note.is-profile:not(.profile-collapsed) .profile-caret {
+  transform: rotate(90deg);
+  color: #3b82f6;
+}
+.profile-body {
+  padding: 0 14px 12px;
+}
+.profile-body .note-body {
+  margin-top: 4px;
+}
+.profile-body .note-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.profile-body .note-foot .edit-btn {
+  margin-left: auto;
+}
