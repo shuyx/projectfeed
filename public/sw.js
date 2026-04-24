@@ -1,11 +1,11 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.5 (custom domain feed.ai-robot.fans)
+// projectfeed Service Worker · build 2026-04-24 v1.16.6 (icon refresh · project-feedicon3)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
 //   - Icons / manifest → cache-first (rarely change, save bandwidth)
 //   - API → network-only (no cache)
 
-const CACHE_VERSION = 'projectfeed-v2';
+const CACHE_VERSION = 'projectfeed-v3';
 const STATIC_ASSETS = [
   '/',
   '/app.js',
