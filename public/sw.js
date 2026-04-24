@@ -1,9 +1,11 @@
 // projectfeed Service Worker
 // Strategy:
-//   - HTML/API → network-first (always fresh, fallback to cache if offline)
-//   - Static assets (js/css/icons) → cache-first
+//   - HTML → network-first (always fresh, fallback to cache if offline)
+//   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
+//   - Icons / manifest → cache-first (rarely change, save bandwidth)
+//   - API → network-only (no cache)
 
-const CACHE_VERSION = 'projectfeed-v1';
+const CACHE_VERSION = 'projectfeed-v2';
 const STATIC_ASSETS = [
   '/',
   '/app.js',
@@ -12,6 +14,21 @@ const STATIC_ASSETS = [
   '/icon-192.png',
   '/icon-512.png',
 ];
+
+function isNetworkFirstAsset(url) {
+  // JS/CSS always network-first so bug fixes propagate on next load
+  return url.pathname.endsWith('.js') || url.pathname.endsWith('.css');
+}
+
+function isCacheFirstAsset(url) {
+  // Binary assets that rarely change
+  return (
+    url.pathname.endsWith('.png') ||
+    url.pathname.endsWith('.jpg') ||
+    url.pathname.endsWith('.svg') ||
+    url.pathname === '/manifest.json'
+  );
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -30,37 +47,54 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
 
-  // API: network-only (fresh data always), offline → let it fail gracefully
+  // API: pass through, no caching
   if (url.pathname.startsWith('/api/')) return;
 
-  // HTML: network-first
-  if (event.request.mode === 'navigate' || url.pathname === '/') {
+  // HTML (navigation) or JS/CSS: network-first
+  const networkFirst =
+    event.request.mode === 'navigate' ||
+    url.pathname === '/' ||
+    isNetworkFirstAsset(url);
+
+  if (networkFirst) {
     event.respondWith(
       fetch(event.request)
         .then((resp) => {
-          const copy = resp.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
+          }
           return resp;
         })
-        .catch(() => caches.match(event.request).then((r) => r || caches.match('/')))
+        .catch(() =>
+          caches.match(event.request).then((r) => r || caches.match('/'))
+        )
     );
     return;
   }
 
-  // Static: cache-first
+  // Icons / manifest: cache-first
+  if (isCacheFirstAsset(url)) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((resp) => {
+          if (resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
+          }
+          return resp;
+        });
+      })
+    );
+    return;
+  }
+
+  // Default: try network, cache fallback
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((resp) => {
-        if (resp.ok) {
-          const copy = resp.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
-        }
-        return resp;
-      });
-    })
+    fetch(event.request).catch(() => caches.match(event.request))
   );
 });
