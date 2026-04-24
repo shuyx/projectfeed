@@ -5,6 +5,9 @@ compatibility_date = "2024-11-01"
 [assets]
 directory = "./public"
 binding = "ASSETS"
+# v1.16.3: let Worker run first so app.all('*') can override Cache-Control headers
+# (without this, CF Assets returns static files before Worker code runs)
+run_worker_first = true
 
 [vars]
 # MiniMax 国际版 API（Key 通过 wrangler secret put MINIMAX_API_KEY 设置）
