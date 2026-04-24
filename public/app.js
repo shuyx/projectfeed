@@ -252,6 +252,11 @@ function renderTabs() {
       state.currentTab = btn.dataset.id;
       renderTabs();
       if (state.searchQuery) updateSearchScope();
+      // v1.16.10: 立即显示 loading 消除"点击无反应"体感（原本要等 loadFeed 完 renderFeed 才刷屏）
+      const feed = $('feed');
+      if (feed) {
+        feed.innerHTML = '<div class="empty-state" style="min-height:200px"><div class="spinner"></div><p class="muted small" style="margin-top:10px">加载中…</p></div>';
+      }
       await refresh();
     });
   });
