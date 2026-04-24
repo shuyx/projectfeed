@@ -134,27 +134,22 @@ app.get('/api/project-stats', async (c) => {
 app.get('/api/notes', async (c) => {
   const project = c.req.query('project');
   const before = c.req.query('before');
+  const q = (c.req.query('q') || '').trim();
   const limit = Math.min(parseInt(c.req.query('limit') || '30'), 100);
 
-  // Top-level only (main/summary/progress); knowledge attached as children
-  let sql, binds;
-  if (project && project !== 'all') {
-    if (before) {
-      sql = 'SELECT * FROM notes WHERE parent_id IS NULL AND project_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?';
-      binds = [project, before, limit];
-    } else {
-      sql = 'SELECT * FROM notes WHERE parent_id IS NULL AND project_id = ? ORDER BY created_at DESC LIMIT ?';
-      binds = [project, limit];
-    }
-  } else {
-    if (before) {
-      sql = 'SELECT * FROM notes WHERE parent_id IS NULL AND created_at < ? ORDER BY created_at DESC LIMIT ?';
-      binds = [before, limit];
-    } else {
-      sql = 'SELECT * FROM notes WHERE parent_id IS NULL ORDER BY created_at DESC LIMIT ?';
-      binds = [limit];
-    }
+  // v1.11: 动态 WHERE，支持 q（content LIKE）+ project + before 任意组合
+  const where = ['parent_id IS NULL'];
+  const binds = [];
+  if (project && project !== 'all') { where.push('project_id = ?'); binds.push(project); }
+  if (q) {
+    // LIKE 特殊字符转义：\ → \\，% → \%，_ → \_
+    const kw = q.replace(/\\/g, '\\\\').replace(/[%_]/g, m => '\\' + m);
+    where.push("content LIKE ? ESCAPE '\\'");
+    binds.push('%' + kw + '%');
   }
+  if (before) { where.push('created_at < ?'); binds.push(before); }
+  const sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`;
+  binds.push(limit);
   const result = await c.env.DB.prepare(sql).bind(...binds).all();
   const notes = result.results || [];
 

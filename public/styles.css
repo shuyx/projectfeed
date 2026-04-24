@@ -1920,3 +1920,82 @@ kbd {
 .cc-suggestion:not(.cc-collapsed) .cc-body {
   padding: 8px 12px 10px;
 }
+
+/* ============================================================
+   v1.11 · 搜索条（header 下方滑入式）+ AI 卡外围留白（点外折回）
+   ============================================================ */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  animation: search-slide-in 0.18s ease;
+}
+@keyframes search-slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.search-bar-icon {
+  flex-shrink: 0;
+  color: var(--muted-2);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-sys);
+  font-size: 14.5px;
+  color: var(--ink);
+  outline: none;
+  -webkit-appearance: none;
+}
+.search-input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+/* 消掉 iOS Safari 搜索框自带的 ✕ 清除按钮（我们自己有 ✕ 关闭整个搜索） */
+.search-input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+.search-scope {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--muted-2);
+  font-size: 16px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.search-close:hover { background: var(--surface-2); color: var(--ink); }
+
+/* 搜索结果空态提示 */
+.search-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+.search-empty .big { font-size: 32px; margin-bottom: 8px; }
+
+/* AI 卡（cc-summary / cc-suggestion）外围留白：点外侧空白即可触发 click-outside 折回 */
+.cc-summary,
+.cc-suggestion {
+  margin-left: 8px;
+  margin-right: 8px;
+}
+/* 折叠态也保留留白，维持视觉节奏一致 */

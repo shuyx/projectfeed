@@ -29,6 +29,7 @@ const state = {
   notes: [],
   hasMore: false,
   loading: false,
+  searchQuery: '',   // v1.11 · 搜索关键词，非空时 loadFeed 走 q 查询
 };
 
 // ---------- Toast ----------
@@ -72,13 +73,16 @@ async function loadFeed(append = false) {
   try {
     const params = new URLSearchParams();
     if (state.currentTab !== 'all') params.set('project', state.currentTab);
-    params.set('limit', '30');
+    // v1.11: 搜索激活时扩大 limit（一次拉更多匹配）+ 停止无限滚动分页
+    const searching = !!state.searchQuery;
+    params.set('limit', searching ? '100' : '30');
+    if (searching) params.set('q', state.searchQuery);
     if (append && state.notes.length > 0) {
       params.set('before', state.notes[state.notes.length - 1].created_at);
     }
     const data = await api('/api/notes?' + params.toString());
     state.notes = append ? [...state.notes, ...(data.notes || [])] : (data.notes || []);
-    state.hasMore = !!data.hasMore;
+    state.hasMore = searching ? false : !!data.hasMore;
   } finally {
     state.loading = false;
   }
@@ -172,6 +176,7 @@ function renderTabs() {
     btn.addEventListener('click', async () => {
       state.currentTab = btn.dataset.id;
       renderTabs();
+      if (state.searchQuery) updateSearchScope();
       await refresh();
     });
   });
@@ -341,6 +346,18 @@ function renderCollapsibleCard(opts) {
   `;
 }
 
+// v1.11: 同时只允许一张 AI 卡（summary/suggestion）展开，用于 click-outside 自动折回
+let activeAiCard = null;
+
+function collapseAiCard(article) {
+  if (!article) return;
+  const body = article.querySelector(':scope > .cc-body');
+  const head = article.querySelector(':scope > .cc-head');
+  if (body) body.setAttribute('hidden', '');
+  article.classList.add('cc-collapsed');
+  head?.setAttribute('aria-expanded', 'false');
+}
+
 // 统一的 toggle 事件绑定（替代 v1.8/v1.9 里 profile-head / progress-head 两段独立监听）
 function bindCollapsibleToggles(root) {
   root.querySelectorAll('.cc > .cc-head').forEach(btn => {
@@ -351,16 +368,39 @@ function bindCollapsibleToggles(root) {
       const body = article?.querySelector(':scope > .cc-body');
       if (!article || !body) return;
       const willOpen = body.hasAttribute('hidden');
+      const isAi = article.classList.contains('cc-summary') || article.classList.contains('cc-suggestion');
       if (willOpen) {
+        // v1.11: 展开 AI 卡前先折回已展开的另一张 AI 卡（全局互斥）
+        if (isAi && activeAiCard && activeAiCard !== article) {
+          collapseAiCard(activeAiCard);
+        }
         body.removeAttribute('hidden');
         article.classList.remove('cc-collapsed');
         btn.setAttribute('aria-expanded', 'true');
+        if (isAi) activeAiCard = article;
       } else {
         body.setAttribute('hidden', '');
         article.classList.add('cc-collapsed');
         btn.setAttribute('aria-expanded', 'false');
+        if (activeAiCard === article) activeAiCard = null;
       }
     });
+  });
+}
+
+// v1.11: document 级 click-outside — 点展开 AI 卡外部任意区域 → 折回
+function setupAiClickOutside() {
+  document.addEventListener('click', (e) => {
+    if (!activeAiCard) return;
+    // stale DOM（renderFeed 重建后的孤儿）直接清掉
+    if (!document.contains(activeAiCard)) {
+      activeAiCard = null;
+      return;
+    }
+    if (!activeAiCard.contains(e.target)) {
+      collapseAiCard(activeAiCard);
+      activeAiCard = null;
+    }
   });
 }
 
@@ -459,19 +499,24 @@ function renderKnowledgeCard(k) {
 function renderFeed() {
   const el = $('feed');
   if (!el) return;
+  // v1.11: 重建 DOM 前清掉 stale 引用（AI 卡重新从折叠态起步）
+  activeAiCard = null;
 
   if (!state.notes.length) {
-    el.innerHTML = renderEmpty();
+    el.innerHTML = state.searchQuery
+      ? `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`
+      : renderEmpty();
     return;
   }
 
   // 分离 profile 卡：pin 在选中项目的 feed 顶部，不参与时间分组
   // "全部" tab 下不显示 profile（太多会堆满，且"项目基础信息"属于单项目视图）
+  // v1.11: 搜索激活时也不显示 profile（用户在找特定内容，profile 易命中干扰）
   const profileNotes = state.notes.filter(n => n.card_type === 'profile');
   const regularNotes = state.notes.filter(n => n.card_type !== 'profile');
 
   let profileHtml = '';
-  if (state.currentTab !== 'all') {
+  if (state.currentTab !== 'all' && !state.searchQuery) {
     const profile = profileNotes.find(p => p.project_id === state.currentTab);
     if (profile) {
       profileHtml = `<div class="profile-wrap">${renderProfileCard(profile)}</div>`;
@@ -479,7 +524,9 @@ function renderFeed() {
   }
 
   if (!regularNotes.length && !profileHtml) {
-    el.innerHTML = renderEmpty();
+    el.innerHTML = state.searchQuery
+      ? `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`
+      : renderEmpty();
     return;
   }
 
@@ -1083,6 +1130,70 @@ function setupInfiniteScroll() {
   scrollObserver.observe(sentinel);
 }
 
+// ---------- v1.11 · Search ----------
+let searchDebounceTimer = null;
+
+function updateSearchScope() {
+  const el = $('search-scope');
+  const input = $('search-input');
+  if (!el) return;
+  if (state.currentTab === 'all') {
+    el.textContent = '全局';
+    if (input && !input.value) input.placeholder = '搜索全部项目…';
+  } else {
+    const p = state.projects.find(x => x.id === state.currentTab);
+    const name = p ? `${p.emoji ? p.emoji + ' ' : ''}${p.name}` : state.currentTab;
+    el.textContent = '仅 ' + name;
+    if (input && !input.value) input.placeholder = `搜索 ${name}…`;
+  }
+}
+
+function openSearch() {
+  const bar = $('search-bar');
+  if (!bar) return;
+  bar.hidden = false;
+  updateSearchScope();
+  setTimeout(() => $('search-input')?.focus(), 20);
+}
+
+async function closeSearch() {
+  const bar = $('search-bar');
+  const input = $('search-input');
+  if (input) input.value = '';
+  if (bar) bar.hidden = true;
+  clearTimeout(searchDebounceTimer);
+  if (state.searchQuery) {
+    state.searchQuery = '';
+    await refresh();
+  }
+}
+
+async function triggerSearch(q) {
+  state.searchQuery = q.trim();
+  try {
+    await loadFeed();
+    renderFeed();
+  } catch (e) {
+    toast('搜索失败：' + e.message, true);
+  }
+}
+
+function setupSearch() {
+  $('btn-search')?.addEventListener('click', openSearch);
+  $('search-close')?.addEventListener('click', closeSearch);
+  const input = $('search-input');
+  if (input) {
+    input.addEventListener('input', (e) => {
+      clearTimeout(searchDebounceTimer);
+      const q = e.target.value;
+      searchDebounceTimer = setTimeout(() => triggerSearch(q), 300);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeSearch();
+    });
+  }
+}
+
 // ---------- Composer ----------
 function updateComposerSpacer() {
   const c = document.querySelector('.composer');
@@ -1657,6 +1768,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSummarize();
     setupSettings();
     setupChat();
+    setupSearch();
+    setupAiClickOutside();
     $('btn-refresh')?.addEventListener('click', refresh);
   } catch (e) {
     console.error('[setup]', e);
