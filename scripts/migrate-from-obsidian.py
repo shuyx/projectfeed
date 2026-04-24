@@ -22,7 +22,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-API_BASE = "https://projectfeed.kevinyuanxin.workers.dev"
+API_BASE = "https://feed.ai-robot.fans"
 VAULT = Path.home() / "Obsidian" / "kevinob"
 SECRETS = Path.home() / ".claude" / "serects api.env"
 
