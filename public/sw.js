@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.15 (Chinese time parse + 5-tier urgency + Todoist due_datetime)
+// projectfeed Service Worker · build 2026-04-24 v1.16 (cross-project move / copy via ⋯ menu)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)

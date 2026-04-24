@@ -2066,6 +2066,130 @@ kbd {
 /* v1.14 · main 卡 note-head 的 spacer：左侧 tag-badge / todoist-btn 靠左，右侧操作按钮组紧挨 */
 .note-head-spacer { flex: 1; }
 
+/* v1.16 · ⋯ 更多操作按钮（main 卡跨项目移动/复制） */
+.more-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-pill);
+  border: none;
+  background: transparent;
+  color: var(--muted-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.more-btn:hover { background: var(--surface-2); color: var(--ink-2); }
+.more-btn:active { transform: scale(0.92); }
+
+/* v1.16 · 卡片操作 action sheet（底部滑入） */
+.action-sheet-modal {
+  align-items: flex-end;
+  justify-content: stretch;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.36);
+}
+.action-sheet {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  background: var(--surface);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  padding: 10px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.12);
+  animation: action-sheet-in 0.2s ease;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+}
+@keyframes action-sheet-in {
+  from { transform: translateY(100%); opacity: 0.5; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.action-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  font-family: var(--font-sys);
+  font-size: 16px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.action-item:hover { background: var(--surface-2); }
+.action-item:active { transform: scale(0.99); background: var(--surface-2); }
+.action-emoji { font-size: 20px; line-height: 1; flex-shrink: 0; }
+.action-label { flex: 1; }
+.action-cancel {
+  margin-top: 6px;
+  justify-content: center;
+  color: var(--muted);
+  font-weight: 600;
+  background: var(--surface-2);
+}
+
+/* v1.16 · 项目选择器 modal */
+.project-picker-content {
+  max-width: 420px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+}
+.project-picker-list {
+  overflow-y: auto;
+  margin: 8px -4px;
+  padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.project-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-family: var(--font-sys);
+  font-size: 14.5px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.project-picker-item:hover { background: var(--surface); border-color: var(--accent); }
+.project-picker-item:active { transform: scale(0.99); }
+.project-picker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.project-picker-label {
+  flex: 1;
+  font-weight: 500;
+}
+.project-picker-prio {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted-2);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  background: var(--surface);
+  border-radius: var(--r-pill);
+}
+
 /* 勾选按钮（tag=todo 主卡 note-head，edit 之后，delete 之前）
    v1.14: 去掉 margin-left:auto，依赖 spacer 推位 */
 .archive-btn, .unarchive-btn {

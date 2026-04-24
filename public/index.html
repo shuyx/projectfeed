@@ -99,6 +99,34 @@
     </div>
   </div>
 
+  <!-- v1.16 · 卡片操作 action sheet（底部滑入） -->
+  <div id="card-action-sheet" class="modal action-sheet-modal" hidden>
+    <div class="action-sheet">
+      <button class="action-item" data-action="move" type="button">
+        <span class="action-emoji">📤</span>
+        <span class="action-label">移动到…</span>
+      </button>
+      <button class="action-item" data-action="copy" type="button">
+        <span class="action-emoji">📑</span>
+        <span class="action-label">复制到…</span>
+      </button>
+      <button class="action-item action-cancel" data-action="cancel" type="button">
+        <span class="action-label">取消</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- v1.16 · 目标项目选择器 modal（移动/复制时弹出） -->
+  <div id="project-picker-modal" class="modal" hidden>
+    <div class="modal-content project-picker-content">
+      <h3 id="project-picker-title">选择目标项目</h3>
+      <div id="project-picker-list" class="project-picker-list"></div>
+      <div class="tag-modal-foot">
+        <button id="project-picker-cancel" class="ghost-btn">取消</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 通用确认 modal -->
   <div id="confirm-modal" class="modal" hidden>
     <div class="modal-content confirm-content">

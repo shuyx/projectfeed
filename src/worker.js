@@ -412,6 +412,49 @@ app.post('/api/profile/:project_id', async (c) => {
   }
 });
 
+// v1.16 · 跨项目移动：把卡片的 project_id 改为目标
+app.post('/api/notes/:id/move', async (c) => {
+  const id = c.req.param('id');
+  const { target_project_id } = await c.req.json().catch(() => ({}));
+  if (!target_project_id) return c.json({ error: 'target_project_id required' }, 400);
+
+  const note = await c.env.DB.prepare('SELECT id, project_id FROM notes WHERE id = ?').bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (note.project_id === target_project_id) return c.json({ error: 'already in target project' }, 400);
+
+  const proj = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(target_project_id).first();
+  if (!proj) return c.json({ error: 'target project not found' }, 404);
+
+  await c.env.DB.prepare('UPDATE notes SET project_id = ? WHERE id = ? OR parent_id = ?')
+    .bind(target_project_id, id, id).run();  // 级联：挂载的 knowledge 子卡也跟着移动
+
+  return c.json({ id, project_id: target_project_id, moved: true });
+});
+
+// v1.16 · 跨项目复制：创建新卡，保留内容/tag/due_at，清空 todoist_task_id
+// 子 knowledge 卡不跟随复制（简化语义；用户需要的话可以单独复制）
+app.post('/api/notes/:id/copy', async (c) => {
+  const id = c.req.param('id');
+  const { target_project_id } = await c.req.json().catch(() => ({}));
+  if (!target_project_id) return c.json({ error: 'target_project_id required' }, 400);
+
+  const src = await c.env.DB.prepare(
+    'SELECT content, card_type, tag, due_at, parent_id FROM notes WHERE id = ?'
+  ).bind(id).first();
+  if (!src) return c.json({ error: 'not found' }, 404);
+
+  const proj = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(target_project_id).first();
+  if (!proj) return c.json({ error: 'target project not found' }, 404);
+
+  const newId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  await c.env.DB.prepare(
+    'INSERT INTO notes (id, project_id, content, card_type, parent_id, tag, due_at, created_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)'
+  ).bind(newId, target_project_id, src.content, src.card_type, src.parent_id, src.tag, src.due_at, createdAt).run();
+
+  return c.json({ id: newId, project_id: target_project_id, content: src.content, card_type: src.card_type, tag: src.tag, due_at: src.due_at, created_at: createdAt, copied_from: id });
+});
+
 // v1.13/v1.14 · 归档待办卡（打勾完成）
 // - 本地 archived=1 + archived_at 必须成功
 // - v1.14: 若原卡是 tag=todo + card_type=main，INSERT 派生 progress 卡（完成时间作为时间戳）

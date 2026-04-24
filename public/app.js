@@ -137,6 +137,20 @@ async function unarchiveNote(noteId) {
   return api(`/api/notes/${noteId}/unarchive`, { method: 'POST' });
 }
 
+// v1.16
+async function moveNote(noteId, targetProjectId) {
+  return api(`/api/notes/${noteId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ target_project_id: targetProjectId }),
+  });
+}
+async function copyNote(noteId, targetProjectId) {
+  return api(`/api/notes/${noteId}/copy`, {
+    method: 'POST',
+    body: JSON.stringify({ target_project_id: targetProjectId }),
+  });
+}
+
 async function deleteNote(id) {
   return api(`/api/notes/${id}`, { method: 'DELETE' });
 }
@@ -748,6 +762,7 @@ function renderFeed() {
               ${todoistBtn}
               <span class="note-head-spacer"></span>
               ${isMain && !n.archived ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
+              ${isMain && !n.archived ? '<button class="more-btn" aria-label="更多操作" title="更多">⋯</button>' : ''}
               <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
               ${archiveBtn}
               <button class="delete-btn" aria-label="删除">✕</button>
@@ -890,6 +905,39 @@ function renderFeed() {
       } catch (err) {
         noteEl.classList.remove('archiving');
         toast('归档失败：' + err.message, true);
+      }
+    });
+  });
+
+  // v1.16: ⋯ 更多菜单（跨项目移动/复制）
+  el.querySelectorAll('.more-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const noteEl = e.target.closest('.note');
+      if (!noteEl) return;
+      const id = noteEl.dataset.id;
+      const note = state.notes.find(x => x.id === id);
+      if (!note) return;
+      const action = await openCardActionSheet();
+      if (!action || action === 'cancel') return;
+      const targetProjectId = await pickTargetProject(note.project_id);
+      if (!targetProjectId) return;
+      const targetProj = state.projects.find(p => p.id === targetProjectId);
+      const projLabel = targetProj ? `${targetProj.emoji ? targetProj.emoji + ' ' : ''}${targetProj.name}` : targetProjectId;
+      try {
+        if (action === 'move') {
+          await moveNote(id, targetProjectId);
+          await loadFeed();
+          renderFeed();
+          toast(`已移动到 ${projLabel}`);
+        } else if (action === 'copy') {
+          await copyNote(id, targetProjectId);
+          await loadFeed();
+          renderFeed();
+          toast(`已复制到 ${projLabel}`);
+        }
+      } catch (err) {
+        toast((action === 'move' ? '移动' : '复制') + '失败：' + err.message, true);
       }
     });
   });
@@ -1524,6 +1572,65 @@ function setupComposer() {
       updateSendBtn();
     }
   }
+}
+
+// v1.16 · 卡片操作 action sheet（底部弹出，选"移动/复制/取消"）
+function openCardActionSheet() {
+  return new Promise((resolve) => {
+    const modal = $('card-action-sheet');
+    if (!modal) { resolve(null); return; }
+    modal.hidden = false;
+
+    const done = (action) => {
+      modal.hidden = true;
+      modal.querySelectorAll('.action-item').forEach(b => b.onclick = null);
+      modal.onclick = null;
+      resolve(action);
+    };
+    modal.querySelectorAll('.action-item').forEach(btn => {
+      btn.onclick = () => done(btn.dataset.action);
+    });
+    // 点蒙层空白也当取消
+    modal.onclick = (e) => { if (e.target === modal) done('cancel'); };
+  });
+}
+
+// v1.16 · 目标项目选择器
+// excludeId: 当前所在项目，从列表排除（避免自移自复）
+function pickTargetProject(excludeId) {
+  return new Promise((resolve) => {
+    const modal = $('project-picker-modal');
+    const list = $('project-picker-list');
+    if (!modal || !list) { resolve(null); return; }
+
+    const candidates = state.projects.filter(p => p.id !== excludeId);
+    const PRIO_DOT_COLOR = { P0: '#dc2626', P1: '#ea580c', P2: '#2563eb', continuous: '#6b7280' };
+    list.innerHTML = candidates.map(p => {
+      const prio = p.priority || 'P2';
+      const color = PRIO_DOT_COLOR[prio] || '#6b7280';
+      const emoji = p.emoji ? `${p.emoji} ` : '';
+      return `<button class="project-picker-item" data-id="${escapeHtml(p.id)}" type="button">
+        <span class="project-picker-dot" style="background:${color}"></span>
+        <span class="project-picker-label">${emoji}${escapeHtml(p.name)}</span>
+        <span class="project-picker-prio">${prio === 'continuous' ? '持续' : prio}</span>
+      </button>`;
+    }).join('');
+
+    modal.hidden = false;
+
+    const done = (projectId) => {
+      modal.hidden = true;
+      list.innerHTML = '';
+      $('project-picker-cancel').onclick = null;
+      modal.onclick = null;
+      resolve(projectId);
+    };
+    list.querySelectorAll('.project-picker-item').forEach(btn => {
+      btn.onclick = () => done(btn.dataset.id);
+    });
+    $('project-picker-cancel').onclick = () => done(null);
+    modal.onclick = (e) => { if (e.target === modal) done(null); };
+  });
 }
 
 // ---------- Tag picker ----------
