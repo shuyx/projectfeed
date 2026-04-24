@@ -1374,7 +1374,7 @@ input, textarea {
 .chat-empty .big { font-size: 32px; margin-bottom: 8px; }
 
 /* ============================================================
-   projectfeed v1.0 — app-title, progress card, tab separator
+   projectfeed v1.0+ — app-title, progress card, tab priority dot
    ============================================================ */
 
 .app-title {
@@ -1384,22 +1384,23 @@ input, textarea {
   color: var(--ink);
 }
 
-/* Tab priority separator: 'P0' / 'P1' / 'P2' / '持续' */
-.tab-sep {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 8px;
-  margin: 0 2px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--muted-2);
-  letter-spacing: 0.08em;
-  background: transparent;
-  border-radius: var(--r-pill);
-  user-select: none;
+/* Tab priority 小圆点（v1.4 · 替代原 tab-sep 横排分隔符） */
+.tab-prio-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
   flex-shrink: 0;
 }
+.tab-prio-dot.prio-P0 { background: #dc2626; }      /* 红 · 最高优先 */
+.tab-prio-dot.prio-P1 { background: #d97706; }      /* 橙 · 次高 */
+.tab-prio-dot.prio-P2 { background: #2563eb; }      /* 蓝 · 常规 */
+.tab-prio-dot.prio-continuous { background: #9ca3af; }  /* 灰 · 持续性 */
+
+/* 旧 tab-sep（兼容保留，不再使用） */
+.tab-sep { display: none; }
 
 /* Progress card (synced from Obsidian) */
 .note.is-progress {
