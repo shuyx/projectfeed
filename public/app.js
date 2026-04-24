@@ -71,16 +71,18 @@ function toast(msg, isError = false, action = null) {
 }
 
 // ---------- API ----------
-// v1.16.4: 加 8 秒超时 + 友好错误（5G/弱网下不再永远挂起）
+// v1.16.4/v1.16.7: 端点级超时 · CRUD 默认 8s，LLM 调用（summarize/chat/correct）60s
 const API_TIMEOUT_MS = 8000;
+const LLM_TIMEOUT_MS = 60000;
 async function api(path, opts = {}) {
+  const { timeoutMs = API_TIMEOUT_MS, ...fetchOpts } = opts;
   const headers = { 'Content-Type': 'application/json' };
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const resp = await fetch(path, {
-      ...opts,
-      headers: { ...headers, ...(opts.headers || {}) },
+      ...fetchOpts,
+      headers: { ...headers, ...(fetchOpts.headers || {}) },
       signal: controller.signal,
     });
     if (!resp.ok) {
@@ -90,7 +92,8 @@ async function api(path, opts = {}) {
     return resp.json();
   } catch (e) {
     if (e.name === 'AbortError') {
-      throw new Error('网络超时（8s），请检查连接或切换到 WiFi');
+      const secs = Math.round(timeoutMs / 1000);
+      throw new Error(`网络超时（${secs}s），请检查连接或切换到 WiFi`);
     }
     throw e;
   } finally {
@@ -183,6 +186,7 @@ async function correctText(text) {
   return api('/api/ai/correct', {
     method: 'POST',
     body: JSON.stringify({ text }),
+    timeoutMs: LLM_TIMEOUT_MS,  // v1.16.7: MiniMax 调用可能 5-30s
   });
 }
 
@@ -190,6 +194,7 @@ async function summarize(timeRange, project, include_progress, include_knowledge
   return api('/api/summarize', {
     method: 'POST',
     body: JSON.stringify({ timeRange, project, include_progress, include_knowledge }),
+    timeoutMs: LLM_TIMEOUT_MS,  // v1.16.7: 一键整理涉及两轮 LLM（summary + suggestion），可能 20-45s
   });
 }
 
@@ -201,6 +206,7 @@ async function sendChat(parentNoteId, message, history) {
   return api('/api/chat', {
     method: 'POST',
     body: JSON.stringify({ parent_note_id: parentNoteId, message, history }),
+    timeoutMs: LLM_TIMEOUT_MS,  // v1.16.7: 问 AI 流式回答，10-30s
   });
 }
 

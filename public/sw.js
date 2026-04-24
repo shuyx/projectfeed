@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.6 (icon refresh · project-feedicon3)
+// projectfeed Service Worker · build 2026-04-24 v1.16.7 (per-endpoint timeouts · LLM calls 60s)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
