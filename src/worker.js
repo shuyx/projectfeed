@@ -110,6 +110,23 @@ app.get('/api/config', async (c) => {
   return c.json({ projects: projects.results || [] });
 });
 
+// 最近 N 天各项目的活跃度（main + progress 卡数）
+// 前端用此排序 Tab（热门在前）
+app.get('/api/project-stats', async (c) => {
+  const days = Math.max(1, Math.min(90, parseInt(c.req.query('days') || '7')));
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+
+  const { results } = await c.env.DB.prepare(
+    "SELECT project_id, COUNT(*) as cnt FROM notes " +
+    "WHERE card_type IN ('main', 'progress') AND created_at >= ? " +
+    "GROUP BY project_id"
+  ).bind(cutoff).all();
+
+  const stats = {};
+  for (const r of (results || [])) stats[r.project_id] = r.cnt;
+  return c.json({ days, stats });
+});
+
 // ============================================================
 // Notes (main + knowledge + summary + progress)
 // ============================================================

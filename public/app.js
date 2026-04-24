@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.6 · markdown render for all cards (was summary-only)
+// projectfeed app.js — v1.7 · tab sort by 7-day activity (hot projects first)
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -23,7 +23,8 @@ function emojiForName(name, offset = 0) {
 // ---------- State ----------
 const state = {
   projects: [],
-  people: [],       // kept as empty array for highlight compat
+  projectStats: {},  // { project_id: count } · 近 7 天活跃卡数 · 用于 Tab 排序
+  people: [],        // kept as empty array for highlight compat
   currentTab: 'all',
   notes: [],
   hasMore: false,
@@ -56,6 +57,13 @@ async function loadConfig() {
   const data = await api('/api/config');
   state.projects = data.projects || [];
   state.people = [];    // not used in single-user mode
+  // 并发拉 7 天活跃度，用于 Tab 排序（最近热门项目前置）
+  try {
+    const s = await api('/api/project-stats?days=7');
+    state.projectStats = s.stats || {};
+  } catch {
+    state.projectStats = {};
+  }
 }
 
 async function loadFeed(append = false) {
@@ -138,8 +146,12 @@ const PRIORITY_ORDER = { P0: 1, P1: 2, P2: 3, continuous: 4 };
 function renderTabs() {
   const el = $('project-tabs');
   if (!el) return;
-  // 按 priority 排序（P0→P1→P2→持续），次序内维持原 sort_order
+  // v1.7 排序：近 7 天活跃度降序 → tie-break 优先级 → tie-break sort_order
+  const stats = state.projectStats || {};
   const sorted = [...state.projects].sort((a, b) => {
+    const ca = stats[a.id] || 0;
+    const cb = stats[b.id] || 0;
+    if (ca !== cb) return cb - ca;  // 活跃度高的在前
     const pa = PRIORITY_ORDER[a.priority || 'P2'] || 5;
     const pb = PRIORITY_ORDER[b.priority || 'P2'] || 5;
     if (pa !== pb) return pa - pb;
@@ -150,8 +162,10 @@ function renderTabs() {
     const active = p.id === state.currentTab ? ' active' : '';
     const prio = p.priority || 'P2';
     const dot = `<span class="tab-prio-dot prio-${prio}" title="${prio === 'continuous' ? '持续' : prio}"></span>`;
+    const cnt = stats[p.id] || 0;
+    const badge = cnt > 0 ? `<span class="tab-count-badge" title="近 7 天 ${cnt} 条">${cnt}</span>` : '';
     const label = (p.emoji ? p.emoji + ' ' : '') + escapeHtml(p.name);
-    html += `<button class="tab${active}" role="tab" data-id="${escapeHtml(p.id)}">${dot}${label}</button>`;
+    html += `<button class="tab${active}" role="tab" data-id="${escapeHtml(p.id)}">${dot}${label}${badge}</button>`;
   }
   el.innerHTML = html;
   el.querySelectorAll('.tab').forEach(btn => {
