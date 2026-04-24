@@ -691,9 +691,10 @@ function renderFeed() {
             <div class="note-head">
               ${tagBadge}
               ${todoistBtn}
+              <span class="note-head-spacer"></span>
               ${isMain && !n.archived ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
-              ${archiveBtn}
               <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+              ${archiveBtn}
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
             <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
@@ -793,7 +794,8 @@ function renderFeed() {
     });
   });
 
-  // v1.13: ✅ 打勾归档（只对 tag=todo 主卡） + ↶ 还原（archived 视图）
+  // v1.13/v1.14: ✅ 打勾归档（只对 tag=todo 主卡）
+  // v1.14: archive 派生一条 progress 卡；撤销时连带删派生卡
   el.querySelectorAll('.archive-btn').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -806,6 +808,7 @@ function renderFeed() {
           new Promise(r => setTimeout(r, 300)),
           archiveNote(id),
         ]);
+        const derivedId = result?.derived_note_id || null;  // v1.14
         await loadFeed();
         renderFeed();
         const todoistFail = result?.todoist_close && result.todoist_close.ok === false;
@@ -815,7 +818,11 @@ function renderFeed() {
           timeoutMs: 5000,
           onClick: async () => {
             try {
-              await unarchiveNote(id);
+              // 并发：还原原卡 + 删派生卡（任一失败仅 toast，另一成功也算撤销）
+              await Promise.all([
+                unarchiveNote(id),
+                derivedId ? deleteNote(derivedId).catch(() => null) : Promise.resolve(),
+              ]);
               await loadFeed();
               renderFeed();
               toast('已还原');

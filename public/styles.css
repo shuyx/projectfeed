@@ -2063,9 +2063,12 @@ kbd {
 /* ============================================================
    v1.13 · Archive（todo 打勾完成）
    ============================================================ */
-/* 勾选按钮（tag=todo 主卡 note-head 右上，✕ 之前） */
+/* v1.14 · main 卡 note-head 的 spacer：左侧 tag-badge / todoist-btn 靠左，右侧操作按钮组紧挨 */
+.note-head-spacer { flex: 1; }
+
+/* 勾选按钮（tag=todo 主卡 note-head，edit 之后，delete 之前）
+   v1.14: 去掉 margin-left:auto，依赖 spacer 推位 */
 .archive-btn, .unarchive-btn {
-  margin-left: auto;
   width: 28px;
   height: 28px;
   border-radius: var(--r-pill);

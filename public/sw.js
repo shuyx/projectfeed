@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.13 (todo archive + Todoist close + archived view)
+// projectfeed Service Worker · build 2026-04-24 v1.14 (archive derives progress card + icon order polish)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
