@@ -1,0 +1,21 @@
+{
+  "name": "projectfeed",
+  "version": "0.1.0",
+  "description": "个人 Portfolio 进展跟踪 App（PWA）",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create projectfeed-db",
+    "db:migrate:local": "wrangler d1 migrations apply projectfeed-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply projectfeed-db --remote",
+    "db:seed:local": "wrangler d1 execute projectfeed-db --local --file=./migrations/0002_seed.sql",
+    "db:seed:remote": "wrangler d1 execute projectfeed-db --remote --file=./migrations/0002_seed.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  },
+  "dependencies": {
+    "hono": "^4.6.10"
+  }
+}
