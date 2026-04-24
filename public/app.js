@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.8 · profile card collapsible (default collapsed)
+// projectfeed app.js — v1.9 · progress cards (Obsidian-sourced) also collapsible
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -302,9 +302,52 @@ function renderEmpty() {
 }
 
 function extractTitle(content, max = 40) {
-  const first = String(content || '').split('\n').find(l => l.trim()) || '知识卡';
-  const plain = first.replace(/\*\*/g, '').trim();
+  const first = String(content || '').split('\n').find(l => l.trim()) || '';
+  let plain = first.trim();
+  // 剥离常见 markdown 前缀，留下可读的标题文本
+  plain = plain.replace(/^#{1,6}\s+/, '');            // ### 一级标题
+  plain = plain.replace(/^[-*+]\s+\[[xX ]\]\s+/, ''); // - [x] checkbox
+  plain = plain.replace(/^[-*+]\s+/, '');             // - 列表
+  plain = plain.replace(/^\d+\.\s+/, '');             // 1. 有序列表
+  plain = plain.replace(/^>\s+/, '');                 // > blockquote
+  plain = plain.replace(/\*\*([^*]+)\*\*/g, '$1');    // **粗体**
+  plain = plain.replace(/`([^`]+)`/g, '$1');          // `code`
+  plain = plain.trim();
+  if (!plain) plain = '(空白)';
   return plain.length > max ? plain.slice(0, max) + '…' : plain;
+}
+
+function renderProgressCard(n, projectMap, showProjectBadge) {
+  // 从 Obsidian 同步来的卡默认折叠，只显示标题 + 来源徽章 + 日期
+  const proj = projectMap[n.project_id];
+  const projLabel = proj
+    ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}`
+    : escapeHtml(n.project_id);
+  const srcLabel = n.source === 'feedback' ? '反馈'
+                  : n.source === 'recap' ? '复盘'
+                  : n.source === 'capsule' ? '时间胶囊'
+                  : '同步';
+  const title = extractTitle(n.content, 60);
+  const dateShort = (n.created_at || '').slice(5, 10);  // MM-DD
+  return `
+    <article class="note is-progress progress-collapsed" data-id="${escapeHtml(n.id)}">
+      <button class="progress-head" type="button" aria-expanded="false">
+        <span class="progress-badge">📥 ${srcLabel}</span>
+        <span class="progress-title">${escapeHtml(title)}</span>
+        <span class="progress-date">${dateShort}</span>
+        <span class="progress-caret" aria-hidden="true">▸</span>
+      </button>
+      <div class="progress-body" hidden>
+        <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+        <div class="note-foot">
+          <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
+          ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
+          <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+          <button class="delete-btn" aria-label="删除">✕</button>
+        </div>
+      </div>
+    </article>
+  `;
 }
 
 function renderProfileCard(n) {
@@ -396,6 +439,11 @@ function renderFeed() {
         const knowledgeHtml = children.length
           ? `<div class="knowledge-cards" data-parent="${escapeHtml(n.id)}">${children.map(renderKnowledgeCard).join('')}</div>`
           : '';
+
+        // progress 卡（Obsidian 同步来的）走折叠结构，与主卡/总结卡/建议卡视觉区分
+        if (isProgress) {
+          return renderProgressCard(n, projectMap, showProjectBadge) + knowledgeHtml;
+        }
 
         // Tag badge（主卡手动打的，以及 progress 卡自动的）
         const tagMap = { todo: { icon: '🎯', label: '待办' }, progress: { icon: '✅', label: '进展' }, idea: { icon: '💡', label: '想法' } };
@@ -526,6 +574,26 @@ function renderFeed() {
         toast('重试失败：' + err.message, true);
         btn.textContent = '⚠️';
         btn.disabled = false;
+      }
+    });
+  });
+
+  // Progress card toggle（Obsidian 来源卡默认折叠，点击展开）
+  el.querySelectorAll('.progress-head').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      if (e.target.closest('.edit-btn') || e.target.closest('.delete-btn')) return;
+      const article = btn.closest('.note');
+      const body = article?.querySelector('.progress-body');
+      if (!article || !body) return;
+      const willOpen = body.hasAttribute('hidden');
+      if (willOpen) {
+        body.removeAttribute('hidden');
+        article.classList.remove('progress-collapsed');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        body.setAttribute('hidden', '');
+        article.classList.add('progress-collapsed');
+        btn.setAttribute('aria-expanded', 'false');
       }
     });
   });

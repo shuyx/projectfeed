@@ -1846,3 +1846,78 @@ kbd {
 .profile-body .note-foot .edit-btn {
   margin-left: auto;
 }
+
+/* ============================================================
+   v1.9 · Progress card collapsible (Obsidian-sourced, default collapsed)
+   ============================================================ */
+.note.is-progress.progress-collapsed {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sys);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+  border-radius: inherit;
+}
+.progress-head:hover { background: rgba(27, 94, 32, 0.06); }
+.progress-head:active { background: rgba(27, 94, 32, 0.10); }
+.progress-head .progress-badge { flex-shrink: 0; }
+.progress-title {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress-date {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.progress-caret {
+  flex-shrink: 0;
+  color: var(--muted-2);
+  font-size: 12px;
+  transition: transform 0.18s ease;
+  display: inline-block;
+}
+.note.is-progress:not(.progress-collapsed) .progress-caret {
+  transform: rotate(90deg);
+  color: #1b5e20;
+}
+.progress-body {
+  padding: 0 12px 10px;
+}
+.progress-body .note-body {
+  margin-top: 2px;
+}
+.progress-body .note-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.progress-body .note-foot .edit-btn,
+.progress-body .note-foot .delete-btn {
+  margin-left: auto;
+}
+/* 折叠态的 progress 卡略淡一点，视觉上让出焦点给主卡 */
+.note.is-progress.progress-collapsed {
+  opacity: 0.92;
+}
+.note.is-progress.progress-collapsed:hover {
+  opacity: 1;
+}

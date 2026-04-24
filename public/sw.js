@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.8 (profile collapsible)
+// projectfeed Service Worker · build 2026-04-24 v1.9 (progress collapsible)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
