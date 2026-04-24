@@ -71,14 +71,31 @@ function toast(msg, isError = false, action = null) {
 }
 
 // ---------- API ----------
+// v1.16.4: 加 8 秒超时 + 友好错误（5G/弱网下不再永远挂起）
+const API_TIMEOUT_MS = 8000;
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
-  const resp = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: resp.statusText }));
-    throw new Error(err.error || resp.statusText);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const resp = await fetch(path, {
+      ...opts,
+      headers: { ...headers, ...(opts.headers || {}) },
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      throw new Error(err.error || resp.statusText);
+    }
+    return resp.json();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error('网络超时（8s），请检查连接或切换到 WiFi');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return resp.json();
 }
 
 async function loadConfig() {

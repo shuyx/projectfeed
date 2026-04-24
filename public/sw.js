@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.3 (wrangler run_worker_first=true so Worker actually sets no-store)
+// projectfeed Service Worker · build 2026-04-24 v1.16.4 (stale-while-revalidate HTML/JS/CSS + 8s API timeout)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
@@ -53,26 +53,35 @@ self.addEventListener('fetch', (event) => {
   // API: pass through, no caching
   if (url.pathname.startsWith('/api/')) return;
 
-  // HTML (navigation) or JS/CSS: network-first
-  const networkFirst =
+  // HTML (navigation) or JS/CSS: stale-while-revalidate
+  // v1.16.4: 5G/弱网下立即返回 cache 秒开 + 后台拉新版进 cache（下次打开生效）
+  const swrCandidate =
     event.request.mode === 'navigate' ||
     url.pathname === '/' ||
     isNetworkFirstAsset(url);
 
-  if (networkFirst) {
-    event.respondWith(
-      fetch(event.request)
-        .then((resp) => {
-          if (resp.ok) {
-            const copy = resp.clone();
-            caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
-          }
-          return resp;
-        })
-        .catch(() =>
-          caches.match(event.request).then((r) => r || caches.match('/'))
-        )
-    );
+  if (swrCandidate) {
+    event.respondWith((async () => {
+      const cached = await caches.match(event.request);
+      // 后台 revalidate（不阻塞响应）
+      const networkP = fetch(event.request).then((resp) => {
+        if (resp.ok) {
+          const copy = resp.clone();
+          caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
+        }
+        return resp;
+      }).catch(() => null);
+      // 有 cache → 立即返回（秒开）
+      if (cached) {
+        networkP;  // fire-and-forget
+        return cached;
+      }
+      // 首次访问无 cache → 等 network，失败 fallback 到根 shell
+      const fresh = await networkP;
+      if (fresh) return fresh;
+      const root = await caches.match('/');
+      return root || new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
+    })());
     return;
   }
 
