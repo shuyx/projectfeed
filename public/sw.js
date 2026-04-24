@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.6
+// projectfeed Service Worker · build 2026-04-24 v1.6.1 (icon update)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
