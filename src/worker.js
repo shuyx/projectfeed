@@ -278,13 +278,14 @@ app.post('/api/profile/:project_id', async (c) => {
   }
 });
 
-// v1.13 · 归档待办卡（打勾完成）
+// v1.13/v1.14 · 归档待办卡（打勾完成）
 // - 本地 archived=1 + archived_at 必须成功
+// - v1.14: 若原卡是 tag=todo + card_type=main，INSERT 派生 progress 卡（完成时间作为时间戳）
 // - Todoist close 失败不回滚本地归档（镜像关系）
 app.post('/api/notes/:id/archive', async (c) => {
   const id = c.req.param('id');
   const note = await c.env.DB.prepare(
-    'SELECT id, tag, todoist_task_id, archived FROM notes WHERE id = ?'
+    "SELECT id, project_id, content, card_type, tag, todoist_task_id, archived FROM notes WHERE id = ?"
   ).bind(id).first();
   if (!note) return c.json({ error: 'not found' }, 404);
   if (note.archived) return c.json({ error: 'already archived' }, 409);
@@ -292,6 +293,17 @@ app.post('/api/notes/:id/archive', async (c) => {
   const archivedAt = new Date().toISOString();
   await c.env.DB.prepare('UPDATE notes SET archived = 1, archived_at = ? WHERE id = ?')
     .bind(archivedAt, id).run();
+
+  // v1.14: 打勾完成的 todo 卡派生一条 progress 卡，体现"进度推进"语义
+  // 原卡保留在归档视图（可还原），派生卡进入时间流作为已完成进展
+  let derivedNoteId = null;
+  if (note.tag === 'todo' && note.card_type === 'main') {
+    derivedNoteId = crypto.randomUUID();
+    const derivedContent = '✓ ' + String(note.content || '');
+    await c.env.DB.prepare(
+      'INSERT INTO notes (id, project_id, content, card_type, parent_id, tag, created_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0)'
+    ).bind(derivedNoteId, note.project_id, derivedContent, 'main', null, 'progress', archivedAt).run();
+  }
 
   // Todoist close（仅对已同步的 todo 卡）· 失败仅返回错误 meta，本地归档照常成功
   let todoistClose = null;
@@ -308,7 +320,7 @@ app.post('/api/notes/:id/archive', async (c) => {
       todoistClose = { ok: false, error: e.message || 'network error' };
     }
   }
-  return c.json({ id, archived: true, archived_at: archivedAt, todoist_close: todoistClose });
+  return c.json({ id, archived: true, archived_at: archivedAt, derived_note_id: derivedNoteId, todoist_close: todoistClose });
 });
 
 // v1.13 · 取消归档（从"已完成"视图点 ↶ 还原）
