@@ -31,6 +31,127 @@ const TODOIST_PROJECT_MAP = {
 
 const VALID_TAGS = ['todo', 'progress', 'idea', 'milestone'];
 
+// ============================================================
+// v1.15 · 中文时间解析（for tag=todo cards）
+// 覆盖：今天/明天/后天/大后天 · 周X/下周X · M月D日 · 上午/下午/晚上/凌晨/中午 · N点/半/分
+// 不覆盖：3小时后、周末、月底、大约等模糊表达
+// 返回 ISO 8601 带东八区时区的字符串，如 '2026-04-25T19:00:00+08:00'；不识别则返回 null
+// ============================================================
+function parseChineseDatetime(text) {
+  if (!text) return null;
+  const s = String(text);
+
+  // —— 1. 日期部分（优先级：绝对日期 > 今明后 > 下周X > 周X）——
+  // 以东八区为"今天"基准（projectfeed 是单人 App，用户在中国）
+  const nowUtc = new Date();
+  const now = new Date(nowUtc.getTime() + 8 * 3600 * 1000);  // 转成北京时间概念
+  let y = now.getUTCFullYear(), m = now.getUTCMonth(), d = now.getUTCDate();
+  let dateMatched = false;
+
+  // 绝对日期：M月D日 / M月D号 / M/D / M-D
+  let mm = s.match(/(\d{1,2})\s*[月\/\-]\s*(\d{1,2})\s*[日号]?/);
+  if (mm) {
+    const mon = parseInt(mm[1]) - 1, day = parseInt(mm[2]);
+    if (mon >= 0 && mon < 12 && day >= 1 && day <= 31) {
+      m = mon; d = day; dateMatched = true;
+      // 如果该日期已过，推到下一年
+      const candidate = new Date(Date.UTC(y, m, d));
+      const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      if (candidate < today) y += 1;
+    }
+  }
+
+  // 相对天（含复合词 "今晚/明早/明晚" 等）
+  if (!dateMatched) {
+    const relMap = {
+      '大后天': 3,
+      '今天': 0, '今日': 0, '今早': 0, '今晨': 0, '今晚': 0, '今夜': 0,
+      '明天': 1, '明日': 1, '明早': 1, '明晨': 1, '明晚': 1, '明夜': 1,
+      '后天': 2,
+    };
+    // 按 key 长度降序尝试（大后天 > 后天，今晚 > 今）
+    const keys = Object.keys(relMap).sort((a, b) => b.length - a.length);
+    for (const kw of keys) {
+      if (s.includes(kw)) {
+        const offset = relMap[kw];
+        const target = new Date(Date.UTC(y, m, d + offset));
+        y = target.getUTCFullYear(); m = target.getUTCMonth(); d = target.getUTCDate();
+        dateMatched = true;
+        break;
+      }
+    }
+  }
+
+  // 下周 X / 周 X（统一按"最近未来的该星期"处理；下周 X 用户预期的次周语义在移动端可通过"N 月 D 日"精确表达）
+  if (!dateMatched) {
+    const weekMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 0, '天': 0 };
+    let wm = s.match(/(?:下(?:个)?(?:周|星期|礼拜)|本周|这周|这个?星期|周|星期|礼拜)([一二三四五六日天])/);
+    if (wm && weekMap[wm[1]] !== undefined) {
+      const targetDow = weekMap[wm[1]];
+      const currentDow = now.getUTCDay();
+      const daysUntilTarget = (targetDow - currentDow + 7) % 7;  // 0 = 今天就是该 dow
+      const target = new Date(Date.UTC(y, m, d + daysUntilTarget));
+      y = target.getUTCFullYear(); m = target.getUTCMonth(); d = target.getUTCDate();
+      dateMatched = true;
+    }
+  }
+
+  // —— 2. 时间部分 ——
+  let h = null, min = null;
+
+  // 优先匹配 "N 点半"（避免被 "N 点" 先吃掉）
+  let hm = s.match(/(\d{1,2})\s*点半/);
+  if (hm) {
+    h = parseInt(hm[1]);
+    min = 30;
+  } else {
+    // "N 点 M 分" / "N 时 M 分" / "N:M"
+    let tm = s.match(/(\d{1,2})\s*[点时:]\s*(\d{1,2})?\s*分?/);
+    if (tm) {
+      h = parseInt(tm[1]);
+      if (tm[2] !== undefined) min = parseInt(tm[2]);
+    }
+  }
+
+  // 上下午前缀调整（有具体 N 点时）
+  // 匹配范围放宽：晚上/晚/夜/今晚/明晚/傍晚/下午 都视为"下午/晚上"信号
+  if (h !== null) {
+    if (/凌晨/.test(s) && h === 12) h = 0;                                       // 凌晨 12 点 = 00:00
+    else if (/(晚上|今晚|明晚|今夜|明夜|夜里|夜晚|傍晚|下午)/.test(s) && h >= 1 && h <= 11) h += 12;
+    // 中午/凌晨 N 点（其他小时范围）直接采用 N
+  }
+
+  // 前缀默认值：只说"下午/晚上/中午/凌晨/上午/早上"没说具体小时
+  if (h === null) {
+    if (/(晚上|今晚|明晚|今夜|明夜|夜里|夜晚)/.test(s)) h = 19;
+    else if (/傍晚/.test(s)) h = 18;
+    else if (/下午/.test(s)) h = 14;
+    else if (/中午/.test(s)) h = 12;
+    else if (/凌晨/.test(s)) h = 2;
+    else if (/(早上|上午|今早|明早|今晨|明晨)/.test(s)) h = 9;
+  }
+
+  // —— 3. 组装 ——
+  if (!dateMatched && h === null) return null;
+
+  // 只有时间没有日期：默认今天（若时间已过则明天）
+  if (!dateMatched && h !== null) {
+    const nowH = now.getUTCHours(), nowM = now.getUTCMinutes();
+    if (h < nowH || (h === nowH && (min ?? 0) <= nowM)) {
+      const tmr = new Date(Date.UTC(y, m, d + 1));
+      y = tmr.getUTCFullYear(); m = tmr.getUTCMonth(); d = tmr.getUTCDate();
+    }
+  }
+
+  // 只有日期没有时间：默认早 9 点
+  if (dateMatched && h === null) { h = 9; min = 0; }
+  if (min === null) min = 0;
+
+  // 组装 ISO 带 +08:00 时区
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${y}-${pad(m + 1)}-${pad(d)}T${pad(h)}:${pad(min)}:00+08:00`;
+}
+
 // v1.12/v1.13 · 过滤器映射（Option 2：UI 7 维）
 // 前端传 filter=<key>，后端解析为附加 WHERE
 function filterToWhere(filter) {
@@ -46,20 +167,23 @@ function filterToWhere(filter) {
   }
 }
 
-async function createTodoistTask(env, { content, description, projectId }) {
+async function createTodoistTask(env, { content, description, projectId, dueAt }) {
   if (!env.TODOIST_API_TOKEN) return { ok: false, error: 'TODOIST_API_TOKEN not set' };
   try {
+    const body = {
+      content,
+      description: description || '',
+      project_id: projectId,
+    };
+    // v1.15: 若本地解析到截止时间，带 due_datetime（ISO 8601 带时区）
+    if (dueAt) body.due_datetime = dueAt;
     const resp = await fetch('https://api.todoist.com/api/v1/tasks', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${env.TODOIST_API_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        content,
-        description: description || '',
-        project_id: projectId,
-      }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) {
       const err = await resp.text();
@@ -72,7 +196,7 @@ async function createTodoistTask(env, { content, description, projectId }) {
   }
 }
 
-async function syncTodoForTodoistTag(c, { noteId, projectId, content }) {
+async function syncTodoForTodoistTag(c, { noteId, projectId, content, dueAt }) {
   const todoistProjectId = TODOIST_PROJECT_MAP[projectId];
   if (!todoistProjectId) return { status: 'skipped', reason: 'no_mapping' };
 
@@ -82,7 +206,7 @@ async function syncTodoForTodoistTag(c, { noteId, projectId, content }) {
   const desc = (rest ? rest.slice(0, 800) + (rest.length > 800 ? '...' : '') + '\n\n' : '') +
     `📱 from projectfeed · ${new Date().toISOString().slice(0, 10)}`;
 
-  const r = await createTodoistTask(c.env, { content: title, description: desc, projectId: todoistProjectId });
+  const r = await createTodoistTask(c.env, { content: title, description: desc, projectId: todoistProjectId, dueAt });
   if (r.ok) {
     await c.env.DB.prepare('UPDATE notes SET todoist_task_id = ? WHERE id = ?').bind(r.task_id, noteId).run();
     return { status: 'ok', task_id: r.task_id, url: r.url };
@@ -173,7 +297,11 @@ app.get('/api/notes', async (c) => {
     }
   }
   if (before) { where.push('created_at < ?'); binds.push(before); }
-  const sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`;
+  // v1.15: filter=todo 时按截止时间排序（紧迫在前，无时间的排最后）
+  const orderBy = filter === 'todo'
+    ? 'ORDER BY (due_at IS NULL) ASC, due_at ASC, created_at DESC'
+    : 'ORDER BY created_at DESC';
+  const sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ${orderBy} LIMIT ?`;
   binds.push(limit);
   const result = await c.env.DB.prepare(sql).bind(...binds).all();
   const notes = result.results || [];
@@ -230,18 +358,24 @@ app.post('/api/notes', async (c) => {
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
 
-  await c.env.DB.prepare(
-    'INSERT INTO notes (id, project_id, content, card_type, parent_id, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, project_id, content, card_type, parentIdFinal, tag, created_at).run();
+  // v1.15: todo 卡自动抽取 due_at（中文时间表达 → ISO +08:00）
+  let due_at = null;
+  if (card_type === 'main' && tag === 'todo') {
+    due_at = parseChineseDatetime(content);
+  }
 
-  // tag === 'todo' 自动同步 Todoist
+  await c.env.DB.prepare(
+    'INSERT INTO notes (id, project_id, content, card_type, parent_id, tag, created_at, due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, project_id, content, card_type, parentIdFinal, tag, created_at, due_at).run();
+
+  // tag === 'todo' 自动同步 Todoist（v1.15: 带 due_datetime）
   let todoistSync = null;
   if (card_type === 'main' && tag === 'todo') {
-    todoistSync = await syncTodoForTodoistTag(c, { noteId: id, projectId: project_id, content });
+    todoistSync = await syncTodoForTodoistTag(c, { noteId: id, projectId: project_id, content, dueAt: due_at });
   }
 
   return c.json({
-    id, project_id, content, card_type, parent_id: parentIdFinal, tag, created_at,
+    id, project_id, content, card_type, parent_id: parentIdFinal, tag, created_at, due_at,
     ...(todoistSync ? { todoist_sync: todoistSync } : {}),
   });
 });
@@ -338,12 +472,12 @@ app.post('/api/notes/:id/unarchive', async (c) => {
 app.post('/api/notes/:id/retry-todoist', async (c) => {
   const id = c.req.param('id');
   const note = await c.env.DB.prepare(
-    'SELECT id, project_id, content, tag, todoist_task_id FROM notes WHERE id = ?'
+    'SELECT id, project_id, content, tag, todoist_task_id, due_at FROM notes WHERE id = ?'
   ).bind(id).first();
   if (!note) return c.json({ error: 'not found' }, 404);
   if (note.tag !== 'todo') return c.json({ error: 'not a todo card' }, 400);
   if (note.todoist_task_id) return c.json({ error: 'already synced', task_id: note.todoist_task_id }, 409);
-  const r = await syncTodoForTodoistTag(c, { noteId: id, projectId: note.project_id, content: note.content });
+  const r = await syncTodoForTodoistTag(c, { noteId: id, projectId: note.project_id, content: note.content, dueAt: note.due_at });
   return c.json({ todoist_sync: r });
 });
 
