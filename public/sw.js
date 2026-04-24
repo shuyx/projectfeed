@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.9 (summarize timeout fix + radio-row selected highlight)
+// projectfeed Service Worker · build 2026-04-24 v1.16.10 (tab switch instant loading + slim summarize prompt)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)

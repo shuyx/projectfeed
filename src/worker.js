@@ -891,35 +891,15 @@ app.post('/api/summarize', async (c) => {
     if (prof) profileContext = String(prof.content).slice(0, 1500);
   }
 
-  // v1.12 · 里程碑软覆盖指令：以最新里程碑为叙事锚点，前面的 progress demote 为上下文
-  const milestoneDirective = `
+  // v1.16.10 · 精简 prompt（system 去冗余导言 + user 内联结构 · max_tokens 1500→1000 · 预计快 5-10s）
+  const systemPrompt = `你是项目进展整理助手。输出精准中文 Markdown，保留原文数字/人名/专业词。${profileContext ? '\n\n' + profileContext : ''}\n\n[里程碑规则] 记录含 [🏁里程碑] 时：以最新里程碑为叙事主线；之前进展 demote 为"通向里程碑的过程"，不详述；保留未被覆盖的瓶颈/风险/遗留决策；多里程碑按时间线 M1→M2→M3。无里程碑按时间线整理。`;
 
-【里程碑权重规则】
-记录中标记 [🏁里程碑] 的卡片是用户手动确认的关键节点，应作为叙事主线：
-- 以最新里程碑为锚点组织输出
-- 里程碑之前的 [进展]/[进度] 卡 demote 为"通向该里程碑的过程"，不单独详述，一笔带过
-- 保留里程碑未覆盖的关键细节（瓶颈、风险、遗留问题、人物决策）
-- 多个里程碑按时间线叙述（M1 → M2 → M3），强调里程碑之间的推进
-- 如果记录中没有 [🏁里程碑] 卡，按正常时间线整理即可`;
+  const summaryPrompt = `「${project === 'all' ? '全部项目' : project}」近 ${days} 天（${parts.join('+')}${tagTagStr}）：
 
-  const systemPrompt = (profileContext
-    ? `你是个人项目进展整理助手。以下是该项目（或多个项目）的基础档案，请在整理时作为背景参考，帮助你识别关键人物、里程碑和约束。
+## 关键进展（3-5 条 · 数字/人物）
+## 待办和风险（未完成事项）
+## 决策与洞察（关键决策/认知更新）
 
-${profileContext}
-
----`
-    : '你是个人项目进展整理助手。') + milestoneDirective;
-
-  const summaryPrompt = `以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}${tagTagStr}）。请输出结构化摘要：
-
-1. **关键进展**（3-5 条，含具体数字/人物）
-2. **待办和风险**（从未完成事项识别）
-3. **决策与洞察**（关键决策、认知更新）
-
-要求：中文，直接输出 Markdown，不加"好的我来"开场白。保留原文数字和专有名词。${include_progress ? '标记 [进度] 的来自 Obsidian 同步。' : ''}${include_knowledge ? '标记 [知识] 的是 AI 问答沉淀。' : ''}
-
----
-原始记录：
 ${lines}`;
 
   try {
@@ -929,29 +909,20 @@ ${lines}`;
         { role: 'user', content: summaryPrompt },
       ],
       temperature: 0.3,
-      max_tokens: 1500,
+      max_tokens: 1000,
     });
 
     let suggestion = null;
     if (generate_suggestion) {
-      const suggestionPrompt = `基于下面对项目的整理摘要，列出 **3-5 条下一步建议**。每条 1-2 句话，含具体动作（如可判断请点出负责人、时间节点或约束）。
+      const suggestionPrompt = `基于下方摘要列 3-5 条**下一步建议**。每条 1-2 句含具体动作（负责人/时间/约束），"- " 开头，不重复摘要内容，区分"必须做"与"可以做"。
 
-规则：
-- 只输出建议列表，无标题无前言
-- 每条以 "- " 开头
-- 中文
-- 不要重复摘要里已有的内容；要提出"下一步该做什么"
-- 区分"必须做"和"可以做"
-
----
-整理摘要：
 ${summary}`;
 
       try {
         suggestion = await callMinimax(c, {
           messages: [{ role: 'user', content: suggestionPrompt }],
           temperature: 0.5,
-          max_tokens: 800,
+          max_tokens: 500,
         });
       } catch (e2) {
         suggestion = null;   // 建议失败不阻塞
