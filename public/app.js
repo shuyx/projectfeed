@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.3 · tag system + suggestion card + export + settings
+// projectfeed app.js — v1.4 · priority dots on tabs + real icon
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -132,29 +132,26 @@ function escapeHtml(s) {
 
 function $(id) { return document.getElementById(id); }
 
-// ---------- Tabs (grouped by P0 / P1 / P2 / 持续) ----------
-const PRIORITY_ORDER = ['P0', 'P1', 'P2', 'continuous'];
-const PRIORITY_LABEL = { P0: 'P0', P1: 'P1', P2: 'P2', continuous: '持续' };
+// ---------- Tabs (sorted by P0/P1/P2/持续 · priority shown as dot prefix) ----------
+const PRIORITY_ORDER = { P0: 1, P1: 2, P2: 3, continuous: 4 };
 
 function renderTabs() {
   const el = $('project-tabs');
   if (!el) return;
-  // "全部" tab first, then group projects by priority
-  const groups = {};
-  for (const p of state.projects) {
-    const key = p.priority || 'P2';
-    (groups[key] = groups[key] || []).push(p);
-  }
+  // 按 priority 排序（P0→P1→P2→持续），次序内维持原 sort_order
+  const sorted = [...state.projects].sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority || 'P2'] || 5;
+    const pb = PRIORITY_ORDER[b.priority || 'P2'] || 5;
+    if (pa !== pb) return pa - pb;
+    return (a.sort_order || 0) - (b.sort_order || 0);
+  });
   let html = `<button class="tab${state.currentTab === 'all' ? ' active' : ''}" role="tab" data-id="all">全部</button>`;
-  for (const key of PRIORITY_ORDER) {
-    const arr = groups[key];
-    if (!arr || !arr.length) continue;
-    html += `<span class="tab-sep" aria-hidden="true">${PRIORITY_LABEL[key]}</span>`;
-    for (const p of arr) {
-      const active = p.id === state.currentTab ? ' active' : '';
-      const label = (p.emoji ? p.emoji + ' ' : '') + escapeHtml(p.name);
-      html += `<button class="tab${active}" role="tab" data-id="${escapeHtml(p.id)}">${label}</button>`;
-    }
+  for (const p of sorted) {
+    const active = p.id === state.currentTab ? ' active' : '';
+    const prio = p.priority || 'P2';
+    const dot = `<span class="tab-prio-dot prio-${prio}" title="${prio === 'continuous' ? '持续' : prio}"></span>`;
+    const label = (p.emoji ? p.emoji + ' ' : '') + escapeHtml(p.name);
+    html += `<button class="tab${active}" role="tab" data-id="${escapeHtml(p.id)}">${dot}${label}</button>`;
   }
   el.innerHTML = html;
   el.querySelectorAll('.tab').forEach(btn => {
