@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.7 · tab sort by 7-day activity (hot projects first)
+// projectfeed app.js — v1.8 · profile card collapsible (default collapsed)
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -308,16 +308,25 @@ function extractTitle(content, max = 40) {
 }
 
 function renderProfileCard(n) {
+  // 默认折叠 · 点击 head 展开 · 项目名从 state.projects 查
+  const proj = state.projects.find(p => p.id === n.project_id);
+  const projTitle = proj
+    ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}`
+    : escapeHtml(n.project_id);
   return `
-    <article class="note is-profile" data-id="${escapeHtml(n.id)}">
-      <div class="note-head">
+    <article class="note is-profile profile-collapsed" data-id="${escapeHtml(n.id)}">
+      <button class="profile-head" type="button" aria-expanded="false">
         <span class="profile-badge">📌 项目基础档案</span>
-        <button class="edit-btn" aria-label="编辑基础档案" title="编辑">✏️</button>
-      </div>
-      <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
-      <div class="note-foot">
-        <span class="note-time muted tiny">${n.updated_at ? '更新于 ' + formatCardDateTime(n.updated_at) : formatCardDateTime(n.created_at)}</span>
-        <span class="muted tiny">ℹ️ 整理时作为 AI 背景资料</span>
+        <span class="profile-title">${projTitle}</span>
+        <span class="profile-caret" aria-hidden="true">▸</span>
+      </button>
+      <div class="profile-body" hidden>
+        <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+        <div class="note-foot">
+          <span class="note-time muted tiny">${n.updated_at ? '更新于 ' + formatCardDateTime(n.updated_at) : formatCardDateTime(n.created_at)}</span>
+          <span class="muted tiny">ℹ️ 整理时作为 AI 背景资料</span>
+          <button class="edit-btn" aria-label="编辑基础档案" title="编辑">✏️</button>
+        </div>
       </div>
     </article>
   `;
@@ -517,6 +526,27 @@ function renderFeed() {
         toast('重试失败：' + err.message, true);
         btn.textContent = '⚠️';
         btn.disabled = false;
+      }
+    });
+  });
+
+  // Profile card toggle（默认折叠，点击展开）
+  el.querySelectorAll('.profile-head').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      // 点到 edit-btn 或 .note-foot 内的按钮时不触发折叠切换
+      if (e.target.closest('.edit-btn')) return;
+      const article = btn.closest('.note');
+      const body = article?.querySelector('.profile-body');
+      if (!article || !body) return;
+      const willOpen = body.hasAttribute('hidden');
+      if (willOpen) {
+        body.removeAttribute('hidden');
+        article.classList.remove('profile-collapsed');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        body.setAttribute('hidden', '');
+        article.classList.add('profile-collapsed');
+        btn.setAttribute('aria-expanded', 'false');
       }
     });
   });
