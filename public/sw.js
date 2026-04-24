@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.10 (tab switch instant loading + slim summarize prompt)
+// projectfeed Service Worker · build 2026-04-24 v1.16.11 (summarize prompt: no-table + keep detail · md-table fixed-layout wrap)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)

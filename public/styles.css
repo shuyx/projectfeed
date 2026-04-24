@@ -424,24 +424,29 @@ input, textarea {
   border-color: rgba(11, 58, 117, 0.12);
 }
 
-/* Markdown tables — shared by summary cards, chat bubbles, summarize modal */
+/* Markdown tables — shared by summary cards, chat bubbles, summarize modal
+   v1.16.11: 移动端卡片宽度有限，原 display:block + overflow-x:auto + white-space:nowrap
+   导致表格必横向滚动。改 table-layout:fixed + word-break 让它 wrap 而不溢出。
+   prompt 层也已要求 LLM 避免使用表格，CSS 是防守性兜底。 */
 .md-table {
   border-collapse: collapse;
   margin: 10px 0;
   font-size: 13.5px;
   width: 100%;
-  display: block;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  table-layout: fixed;
 }
 .md-table thead {
   background: rgba(45, 106, 79, 0.08);
 }
 .md-table th, .md-table td {
-  padding: 8px 12px;
+  padding: 6px 8px;
   border: 1px solid var(--border);
   text-align: left;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  vertical-align: top;
 }
 .md-table th {
   font-weight: 600;

@@ -891,14 +891,29 @@ app.post('/api/summarize', async (c) => {
     if (prof) profileContext = String(prof.content).slice(0, 1500);
   }
 
-  // v1.16.10 · 精简 prompt（system 去冗余导言 + user 内联结构 · max_tokens 1500→1000 · 预计快 5-10s）
-  const systemPrompt = `你是项目进展整理助手。输出精准中文 Markdown，保留原文数字/人名/专业词。${profileContext ? '\n\n' + profileContext : ''}\n\n[里程碑规则] 记录含 [🏁里程碑] 时：以最新里程碑为叙事主线；之前进展 demote 为"通向里程碑的过程"，不详述；保留未被覆盖的瓶颈/风险/遗留决策；多里程碑按时间线 M1→M2→M3。无里程碑按时间线整理。`;
+  // v1.16.11 · 精简但保留信息量 + 禁用表格（移动端卡片宽度有限，表格会横向溢出）
+  const systemPrompt = `你是项目进展整理助手。输出中文 Markdown，保留原文数字/人名/日期/专业词等具体细节。
+
+格式规则：
+- 用 ## 二级标题分节
+- 节内用无序列表 -（有明确顺序时用有序列表 1./2.）
+- 列表项可嵌套子列表补充细节（"发生了什么" → 子级列"涉及的人/数字/影响"）
+- **禁止使用 Markdown 表格**（| 列 | 列 | 格式会在移动端溢出卡片宽度）${profileContext ? '\n\n' + profileContext : ''}
+
+[里程碑规则] 记录含 [🏁里程碑] 时：以最新里程碑为叙事主线；之前进展 demote 为"通向里程碑的过程"；保留未被覆盖的瓶颈/风险/遗留决策；多里程碑按时间线 M1→M2→M3。无里程碑按时间线整理。`;
 
   const summaryPrompt = `「${project === 'all' ? '全部项目' : project}」近 ${days} 天（${parts.join('+')}${tagTagStr}）：
 
-## 关键进展（3-5 条 · 数字/人物）
-## 待办和风险（未完成事项）
-## 决策与洞察（关键决策/认知更新）
+## 关键进展
+3-6 条要点。每条包含：**具体做了什么** · 涉及的数字/人物/日期 · 1-2 句背景或影响。重要事项用嵌套子列表展开。
+
+## 待办和风险
+从未完成事项识别。按紧迫度排，标注"必须尽快 / 潜在风险 / 已阻塞"等。
+
+## 决策与洞察
+关键决策（谁决定 / 为什么 / 影响范围） · 认知更新（原以为 X，现在发现 Y） · 值得记住的观察。
+
+---
 
 ${lines}`;
 
@@ -909,12 +924,12 @@ ${lines}`;
         { role: 'user', content: summaryPrompt },
       ],
       temperature: 0.3,
-      max_tokens: 1000,
+      max_tokens: 1200,
     });
 
     let suggestion = null;
     if (generate_suggestion) {
-      const suggestionPrompt = `基于下方摘要列 3-5 条**下一步建议**。每条 1-2 句含具体动作（负责人/时间/约束），"- " 开头，不重复摘要内容，区分"必须做"与"可以做"。
+      const suggestionPrompt = `基于下方摘要列 3-5 条**下一步建议**。每条包含：具体动作（做什么）+ 可判断时的负责人/时间节点/约束。用"- " 开头，不重复摘要内容，按紧迫度区分"必须做"与"可以做"。不要用表格。
 
 ${summary}`;
 
@@ -922,7 +937,7 @@ ${summary}`;
         suggestion = await callMinimax(c, {
           messages: [{ role: 'user', content: suggestionPrompt }],
           temperature: 0.5,
-          max_tokens: 500,
+          max_tokens: 600,
         });
       } catch (e2) {
         suggestion = null;   // 建议失败不阻塞
