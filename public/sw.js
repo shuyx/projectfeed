@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.2 (versioned asset URLs bust CF edge cache)
+// projectfeed Service Worker · build 2026-04-24 v1.16.3 (wrangler run_worker_first=true so Worker actually sets no-store)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
