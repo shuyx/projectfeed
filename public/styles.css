@@ -2058,3 +2058,62 @@ kbd {
 .filter-chip.active-milestone  { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; border-color: #f59e0b; box-shadow: 0 0 0 2px rgba(245,158,11,0.15); }
 .filter-chip.active-feedback   { background: #e9e9e4; color: #424242; border-color: #b8b8b0; }
 .filter-chip.active-summary    { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
+.filter-chip.active-archived   { background: #eceff1; color: #455a64; border-color: #90a4ae; }
+
+/* ============================================================
+   v1.13 · Archive（todo 打勾完成）
+   ============================================================ */
+/* 勾选按钮（tag=todo 主卡 note-head 右上，✕ 之前） */
+.archive-btn, .unarchive-btn {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-pill);
+  border: none;
+  background: transparent;
+  color: var(--muted-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.archive-btn:hover { background: rgba(27, 94, 32, 0.10); color: #1b5e20; }
+.archive-btn:active { transform: scale(0.92); }
+.unarchive-btn:hover { background: rgba(69, 90, 100, 0.10); color: #263238; }
+
+/* 打勾淡出动画（archive 前临时加这个 class） */
+.note.archiving {
+  animation: note-archive 0.30s ease forwards;
+  pointer-events: none;
+}
+@keyframes note-archive {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to   { opacity: 0; transform: translateX(24px) scale(0.97); max-height: 0; margin: 0; padding: 0; border: 0; }
+}
+
+/* 已完成视图（filter=archived）: 卡片整体灰化 */
+.note.is-archived {
+  opacity: 0.7;
+  filter: saturate(0.7);
+}
+.note.is-archived:hover { opacity: 0.92; }
+
+/* toast 带 Undo 按钮 */
+.toast-action {
+  margin-left: 12px;
+  padding: 2px 10px;
+  background: rgba(255,255,255,0.18);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: var(--r-pill);
+  color: inherit;
+  font-family: var(--font-sys);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.toast-action:hover { background: rgba(255,255,255,0.28); }
+.toast-action:active { transform: scale(0.96); }

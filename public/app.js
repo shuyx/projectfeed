@@ -33,7 +33,7 @@ const state = {
   activeFilter: '',  // v1.12 · '' | 'todo' | 'progress' | 'idea' | 'milestone' | 'feedback' | 'summary'
 };
 
-// v1.12 · filter chip 定义（UI 6 维，Option 2 映射到后端 WHERE）
+// v1.12/v1.13 · filter chip 定义（UI 7 维，Option 2 映射到后端 WHERE）
 const FILTER_CHIPS = [
   { key: 'todo',       icon: '🎯', label: '待办' },
   { key: 'progress',   icon: '✅', label: '进展' },
@@ -41,17 +41,33 @@ const FILTER_CHIPS = [
   { key: 'milestone',  icon: '🏁', label: '里程碑' },
   { key: 'feedback',   icon: '📥', label: '反馈' },
   { key: 'summary',    icon: '🤖', label: '总结' },
+  { key: 'archived',   icon: '📦', label: '已完成' },   // v1.13 · 归档视图（用 📦 避免和 progress 的 ✅ 混淆）
 ];
 
 // ---------- Toast ----------
 let toastTimer = null;
-function toast(msg, isError = false) {
+function toast(msg, isError = false, action = null) {
+  // v1.13: 支持带 Undo 按钮的 toast。action = { label, onClick, timeoutMs }
   const el = document.getElementById('toast');
   if (!el) return;
-  el.textContent = msg;
-  el.className = 'toast show' + (isError ? ' error' : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
+  el.innerHTML = '';
+  el.appendChild(document.createTextNode(msg));
+  if (action && typeof action.onClick === 'function') {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.type = 'button';
+    btn.textContent = action.label || '撤销';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.className = 'toast';
+      action.onClick();
+    });
+    el.appendChild(btn);
+  }
+  el.className = 'toast show' + (isError ? ' error' : '');
+  const dur = action?.timeoutMs || 3000;
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, dur);
 }
 
 // ---------- API ----------
@@ -111,6 +127,14 @@ async function postNote(project_id, content, tag) {
 
 async function retryTodoistSync(noteId) {
   return api(`/api/notes/${noteId}/retry-todoist`, { method: 'POST' });
+}
+
+// v1.13
+async function archiveNote(noteId) {
+  return api(`/api/notes/${noteId}/archive`, { method: 'POST' });
+}
+async function unarchiveNote(noteId) {
+  return api(`/api/notes/${noteId}/unarchive`, { method: 'POST' });
 }
 
 async function deleteNote(id) {
@@ -650,19 +674,31 @@ function renderFeed() {
         // main 卡保持原有 article 结构（无折叠）
         const classes = ['note'];
         if (isMain && n.tag) classes.push(`tag-bg-${n.tag}`);
+        if (n.archived) classes.push('is-archived');  // v1.13
+
+        // v1.13: tag=todo 未归档 → ✅ 打勾；归档视图 → ↶ 还原
+        let archiveBtn = '';
+        if (isMain) {
+          if (n.archived) {
+            archiveBtn = '<button class="unarchive-btn" aria-label="还原到待办" title="还原">↶</button>';
+          } else if (n.tag === 'todo') {
+            archiveBtn = '<button class="archive-btn" aria-label="标记完成" title="打勾完成">✅</button>';
+          }
+        }
 
         return `
           <article class="${classes.join(' ')}" data-id="${escapeHtml(n.id)}">
             <div class="note-head">
               ${tagBadge}
               ${todoistBtn}
-              ${isMain ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
+              ${isMain && !n.archived ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
+              ${archiveBtn}
               <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
             <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
             <div class="note-foot">
-              <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
+              <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}${n.archived_at ? ' · 完成于 ' + formatCardDateTime(n.archived_at) : ''}</span>
               ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
             </div>
           </article>
@@ -753,6 +789,61 @@ function renderFeed() {
         toast('重试失败：' + err.message, true);
         btn.textContent = '⚠️';
         btn.disabled = false;
+      }
+    });
+  });
+
+  // v1.13: ✅ 打勾归档（只对 tag=todo 主卡） + ↶ 还原（archived 视图）
+  el.querySelectorAll('.archive-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const noteEl = e.target.closest('.note');
+      if (!noteEl) return;
+      const id = noteEl.dataset.id;
+      noteEl.classList.add('archiving');  // 触发 0.3s 淡出动画
+      try {
+        const [, result] = await Promise.all([
+          new Promise(r => setTimeout(r, 300)),
+          archiveNote(id),
+        ]);
+        await loadFeed();
+        renderFeed();
+        const todoistFail = result?.todoist_close && result.todoist_close.ok === false;
+        const msg = todoistFail ? '✓ 已完成（Todoist 同步失败）' : '✓ 已完成';
+        toast(msg, todoistFail, {
+          label: '撤销',
+          timeoutMs: 5000,
+          onClick: async () => {
+            try {
+              await unarchiveNote(id);
+              await loadFeed();
+              renderFeed();
+              toast('已还原');
+            } catch (err2) {
+              toast('还原失败：' + err2.message, true);
+            }
+          },
+        });
+      } catch (err) {
+        noteEl.classList.remove('archiving');
+        toast('归档失败：' + err.message, true);
+      }
+    });
+  });
+
+  el.querySelectorAll('.unarchive-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const noteEl = e.target.closest('.note');
+      if (!noteEl) return;
+      const id = noteEl.dataset.id;
+      try {
+        await unarchiveNote(id);
+        await loadFeed();
+        renderFeed();
+        toast('已还原');
+      } catch (err) {
+        toast('还原失败：' + err.message, true);
       }
     });
   });
