@@ -317,8 +317,71 @@ function extractTitle(content, max = 40) {
   return plain.length > max ? plain.slice(0, max) + '…' : plain;
 }
 
+// ============================================================
+// v1.10 · CollapsibleCard — 统一折叠卡骨架
+// profile / progress / summary / suggestion 四种卡共用
+// ============================================================
+function renderCollapsibleCard(opts) {
+  const collapsed = !!opts.initialCollapsed;
+  const classes = ['note', 'cc', `cc-${opts.variant}`];
+  if (opts.extraClasses) classes.push(opts.extraClasses);
+  if (collapsed) classes.push('cc-collapsed');
+  const titleHtml = opts.title ? `<span class="cc-title">${escapeHtml(opts.title)}</span>` : '';
+  const dateHtml = opts.date ? `<span class="cc-date">${escapeHtml(opts.date)}</span>` : '';
+  return `
+    <article class="${classes.join(' ')}" data-id="${escapeHtml(opts.id)}">
+      <button class="cc-head" type="button" aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="cc-badge">${opts.badgeIcon} ${escapeHtml(opts.badgeLabel)}</span>
+        ${titleHtml}
+        ${dateHtml}
+        <span class="cc-caret" aria-hidden="true">▸</span>
+      </button>
+      <div class="cc-body" ${collapsed ? 'hidden' : ''}>${opts.bodyHtml}</div>
+    </article>
+  `;
+}
+
+// 统一的 toggle 事件绑定（替代 v1.8/v1.9 里 profile-head / progress-head 两段独立监听）
+function bindCollapsibleToggles(root) {
+  root.querySelectorAll('.cc > .cc-head').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      // 点到 cc-body 内任意按钮（edit / delete / chat / todoist 等）时不折叠
+      if (e.target.closest('.cc-body')) return;
+      const article = btn.closest('.cc');
+      const body = article?.querySelector(':scope > .cc-body');
+      if (!article || !body) return;
+      const willOpen = body.hasAttribute('hidden');
+      if (willOpen) {
+        body.removeAttribute('hidden');
+        article.classList.remove('cc-collapsed');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        body.setAttribute('hidden', '');
+        article.classList.add('cc-collapsed');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+    });
+  });
+}
+
+// 条件折叠：summary / suggestion 卡的 body 高度超过半屏时自动折叠
+// 必须在 innerHTML 注入后、paint 前同步调用（scrollHeight 会触发强制 layout）
+function collapseLongAiCards(root) {
+  const halfScreen = Math.max(260, (window.innerHeight || 700) * 0.5);
+  root.querySelectorAll('.cc-summary, .cc-suggestion').forEach(article => {
+    if (article.classList.contains('cc-collapsed')) return;
+    const body = article.querySelector(':scope > .cc-body');
+    if (!body) return;
+    if (body.scrollHeight > halfScreen) {
+      body.setAttribute('hidden', '');
+      article.classList.add('cc-collapsed');
+      article.querySelector(':scope > .cc-head')?.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
 function renderProgressCard(n, projectMap, showProjectBadge) {
-  // 从 Obsidian 同步来的卡默认折叠，只显示标题 + 来源徽章 + 日期
+  // 从 Obsidian 同步来的卡默认折叠
   const proj = projectMap[n.project_id];
   const projLabel = proj
     ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}`
@@ -327,52 +390,51 @@ function renderProgressCard(n, projectMap, showProjectBadge) {
                   : n.source === 'recap' ? '复盘'
                   : n.source === 'capsule' ? '时间胶囊'
                   : '同步';
-  const title = extractTitle(n.content, 60);
-  const dateShort = (n.created_at || '').slice(5, 10);  // MM-DD
-  return `
-    <article class="note is-progress progress-collapsed" data-id="${escapeHtml(n.id)}">
-      <button class="progress-head" type="button" aria-expanded="false">
-        <span class="progress-badge">📥 ${srcLabel}</span>
-        <span class="progress-title">${escapeHtml(title)}</span>
-        <span class="progress-date">${dateShort}</span>
-        <span class="progress-caret" aria-hidden="true">▸</span>
-      </button>
-      <div class="progress-body" hidden>
-        <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
-        <div class="note-foot">
-          <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
-          ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
-          <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
-          <button class="delete-btn" aria-label="删除">✕</button>
-        </div>
-      </div>
-    </article>
+  const bodyHtml = `
+    <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+    <div class="note-foot">
+      <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
+      ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
+      <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+      <button class="delete-btn" aria-label="删除">✕</button>
+    </div>
   `;
+  return renderCollapsibleCard({
+    id: n.id,
+    variant: 'progress',
+    badgeIcon: '📥',
+    badgeLabel: srcLabel,
+    title: extractTitle(n.content, 60),
+    date: (n.created_at || '').slice(5, 10),
+    initialCollapsed: true,
+    bodyHtml,
+    extraClasses: 'is-progress',
+  });
 }
 
 function renderProfileCard(n) {
-  // 默认折叠 · 点击 head 展开 · 项目名从 state.projects 查
   const proj = state.projects.find(p => p.id === n.project_id);
   const projTitle = proj
-    ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}`
-    : escapeHtml(n.project_id);
-  return `
-    <article class="note is-profile profile-collapsed" data-id="${escapeHtml(n.id)}">
-      <button class="profile-head" type="button" aria-expanded="false">
-        <span class="profile-badge">📌 项目基础档案</span>
-        <span class="profile-title">${projTitle}</span>
-        <span class="profile-caret" aria-hidden="true">▸</span>
-      </button>
-      <div class="profile-body" hidden>
-        <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
-        <div class="note-foot">
-          <span class="note-time muted tiny">${n.updated_at ? '更新于 ' + formatCardDateTime(n.updated_at) : formatCardDateTime(n.created_at)}</span>
-          <span class="muted tiny">ℹ️ 整理时作为 AI 背景资料</span>
-          <button class="edit-btn" aria-label="编辑基础档案" title="编辑">✏️</button>
-        </div>
-      </div>
-    </article>
+    ? `${proj.emoji ? proj.emoji + ' ' : ''}${proj.name}`
+    : n.project_id;
+  const bodyHtml = `
+    <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+    <div class="note-foot">
+      <span class="note-time muted tiny">${n.updated_at ? '更新于 ' + formatCardDateTime(n.updated_at) : formatCardDateTime(n.created_at)}</span>
+      <span class="muted tiny">ℹ️ 整理时作为 AI 背景资料</span>
+      <button class="edit-btn" aria-label="编辑基础档案" title="编辑">✏️</button>
+    </div>
   `;
+  return renderCollapsibleCard({
+    id: n.id,
+    variant: 'profile',
+    badgeIcon: '📌',
+    badgeLabel: '项目基础档案',
+    title: projTitle,
+    initialCollapsed: true,
+    bodyHtml,
+    extraClasses: 'is-profile',
+  });
 }
 
 function renderKnowledgeCard(k) {
@@ -445,21 +507,10 @@ function renderFeed() {
           return renderProgressCard(n, projectMap, showProjectBadge) + knowledgeHtml;
         }
 
-        // Tag badge（主卡手动打的，以及 progress 卡自动的）
+        // Tag badge（主卡手动打的）
         const tagMap = { todo: { icon: '🎯', label: '待办' }, progress: { icon: '✅', label: '进展' }, idea: { icon: '💡', label: '想法' } };
         const tagInfo = n.tag ? tagMap[n.tag] : null;
         const tagBadge = tagInfo ? `<span class="tag-badge tag-${n.tag}">${tagInfo.icon} ${tagInfo.label}</span>` : '';
-
-        let kindBadge = '';
-        if (isSummary) kindBadge = '<span class="summary-badge">🤖 AI 整理</span>';
-        else if (isSuggestion) kindBadge = '<span class="suggestion-badge">🔮 下一步建议</span>';
-        else if (isProgress) {
-          const srcLabel = n.source === 'feedback' ? '反馈'
-                          : n.source === 'recap' ? '复盘'
-                          : n.source === 'capsule' ? '时间胶囊'
-                          : '同步';
-          kindBadge = `<span class="progress-badge">📥 ${srcLabel}</span>`;
-        }
 
         // Todoist 状态按钮（仅 tag=todo 的主卡）
         let todoistBtn = '';
@@ -471,20 +522,45 @@ function renderFeed() {
           }
         }
 
+        // summary / suggestion 走 CollapsibleCard，超半屏时 collapseLongAiCards() 追加折叠类
+        if (isSummary || isSuggestion) {
+          const innerHtml = `
+            <div class="note-head">
+              ${tagBadge}
+              ${todoistBtn}
+              ${!isSuggestion ? '<button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>' : ''}
+              <button class="delete-btn" aria-label="删除">✕</button>
+            </div>
+            <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+            <div class="note-foot">
+              <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
+              ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
+            </div>
+          `;
+          return renderCollapsibleCard({
+            id: n.id,
+            variant: isSummary ? 'summary' : 'suggestion',
+            badgeIcon: isSummary ? '🤖' : '🔮',
+            badgeLabel: isSummary ? 'AI 整理' : '下一步建议',
+            title: extractTitle(n.content, 60),
+            date: (n.created_at || '').slice(5, 10),
+            initialCollapsed: false,  // 展开初渲染，随后 collapseLongAiCards 测量超半屏再折叠
+            bodyHtml: innerHtml,
+            extraClasses: isSummary ? 'is-summary' : 'is-suggestion',
+          }) + knowledgeHtml;
+        }
+
+        // main 卡保持原有 article 结构（无折叠）
         const classes = ['note'];
-        if (isSummary) classes.push('is-summary');
-        if (isSuggestion) classes.push('is-suggestion');
-        if (isProgress) classes.push('is-progress');
         if (isMain && n.tag) classes.push(`tag-bg-${n.tag}`);
 
         return `
           <article class="${classes.join(' ')}" data-id="${escapeHtml(n.id)}">
             <div class="note-head">
               ${tagBadge}
-              ${kindBadge}
               ${todoistBtn}
               ${isMain ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
-              ${!isSuggestion ? '<button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>' : ''}
+              <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
             <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
@@ -502,6 +578,9 @@ function renderFeed() {
   const sentinel = state.hasMore ? '<div id="feed-sentinel" class="feed-sentinel"><span class="spinner"></span> 加载更多…</div>' : '';
 
   el.innerHTML = profileHtml + groupsHtml + sentinel;
+
+  // v1.10: summary / suggestion 超半屏则折叠（同步测 scrollHeight，paint 前落定）
+  collapseLongAiCards(el);
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {
@@ -578,46 +657,8 @@ function renderFeed() {
     });
   });
 
-  // Progress card toggle（Obsidian 来源卡默认折叠，点击展开）
-  el.querySelectorAll('.progress-head').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      if (e.target.closest('.edit-btn') || e.target.closest('.delete-btn')) return;
-      const article = btn.closest('.note');
-      const body = article?.querySelector('.progress-body');
-      if (!article || !body) return;
-      const willOpen = body.hasAttribute('hidden');
-      if (willOpen) {
-        body.removeAttribute('hidden');
-        article.classList.remove('progress-collapsed');
-        btn.setAttribute('aria-expanded', 'true');
-      } else {
-        body.setAttribute('hidden', '');
-        article.classList.add('progress-collapsed');
-        btn.setAttribute('aria-expanded', 'false');
-      }
-    });
-  });
-
-  // Profile card toggle（默认折叠，点击展开）
-  el.querySelectorAll('.profile-head').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      // 点到 edit-btn 或 .note-foot 内的按钮时不触发折叠切换
-      if (e.target.closest('.edit-btn')) return;
-      const article = btn.closest('.note');
-      const body = article?.querySelector('.profile-body');
-      if (!article || !body) return;
-      const willOpen = body.hasAttribute('hidden');
-      if (willOpen) {
-        body.removeAttribute('hidden');
-        article.classList.remove('profile-collapsed');
-        btn.setAttribute('aria-expanded', 'true');
-      } else {
-        body.setAttribute('hidden', '');
-        article.classList.add('profile-collapsed');
-        btn.setAttribute('aria-expanded', 'false');
-      }
-    });
-  });
+  // v1.10: 统一 CollapsibleCard toggle（profile / progress / summary / suggestion 共用）
+  bindCollapsibleToggles(el);
 
   // Knowledge card toggle
   el.querySelectorAll('.knowledge-card-head').forEach(btn => {
