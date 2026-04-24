@@ -329,45 +329,99 @@ input, textarea {
 }
 
 /* Summary card rich rendering — markdown blocks need reset */
-.note.is-summary .note-body { white-space: normal; }
-.note.is-summary .note-body h1,
-.note.is-summary .note-body h2,
-.note.is-summary .note-body h3 {
-  margin: 14px 0 6px;
+/* ============================================================
+   v1.6 · 通用 Markdown 排版（所有卡片的 note-body 共享）
+   ============================================================ */
+.note-body { white-space: normal; }
+.note-body h1,
+.note-body h2,
+.note-body h3 {
+  margin: 12px 0 6px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--ink);
+  line-height: 1.35;
 }
-.note.is-summary .note-body h1 { font-size: 16px; }
-.note.is-summary .note-body h2 { font-size: 15px; color: var(--accent-ink); }
-.note.is-summary .note-body h3 {
+.note-body h1 { font-size: 16px; }
+.note-body h2 { font-size: 14.5px; color: var(--accent-ink); }
+.note-body h3 {
   font-size: 13.5px;
-  color: var(--accent-ink);
-  text-transform: none;
-  letter-spacing: -0.005em;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0;
 }
-.note.is-summary .note-body h1:first-child,
-.note.is-summary .note-body h2:first-child,
-.note.is-summary .note-body h3:first-child,
-.note.is-summary .note-body p:first-child,
-.note.is-summary .note-body ul:first-child,
-.note.is-summary .note-body ol:first-child { margin-top: 0; }
-.note.is-summary .note-body p { margin: 6px 0; }
-.note.is-summary .note-body ul,
-.note.is-summary .note-body ol { margin: 4px 0 8px; padding-left: 22px; }
-.note.is-summary .note-body li { margin: 2px 0; }
-.note.is-summary .note-body em { font-style: italic; color: var(--ink-2); }
-.note.is-summary .note-body code {
+.note-body h1:first-child,
+.note-body h2:first-child,
+.note-body h3:first-child,
+.note-body p:first-child,
+.note-body ul:first-child,
+.note-body ol:first-child { margin-top: 0; }
+.note-body p { margin: 6px 0; }
+.note-body ul,
+.note-body ol { margin: 4px 0 8px; padding-left: 22px; }
+.note-body li { margin: 2px 0; line-height: 1.55; }
+.note-body em { font-style: italic; color: var(--ink-2); }
+.note-body strong { color: var(--ink); font-weight: 700; }
+.note-body code {
   background: rgba(0, 0, 0, 0.06);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: 13px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
 }
-.note.is-summary .note-body hr {
+.note-body blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding: 2px 10px;
+  margin: 6px 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  background: rgba(0, 0, 0, 0.015);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.note-body hr {
   border: none;
-  border-top: 1px dashed rgba(45, 106, 79, 0.3);
+  border-top: 1px dashed rgba(0, 0, 0, 0.12);
   margin: 10px 0;
+}
+
+/* 卡片特定的 h2 色调覆盖 */
+.note.is-summary .note-body h2 { color: var(--accent-ink); }
+.note.is-summary .note-body h3 { color: var(--accent-ink); }
+.note.is-suggestion .note-body h2 { color: #b45309; }
+.note.is-suggestion .note-body h3 { color: #b45309; }
+.note.is-summary .note-body hr { border-top-color: rgba(45, 106, 79, 0.3); }
+
+/* Knowledge 卡内部（折叠区）的 markdown 也走同一套 */
+.knowledge-card-body h1,
+.knowledge-card-body h2,
+.knowledge-card-body h3 {
+  margin: 10px 0 4px;
+  font-size: 13.5px;
+  color: #0b3a75;
+  font-weight: 600;
+}
+.knowledge-card-body ul,
+.knowledge-card-body ol { margin: 4px 0 6px; padding-left: 20px; }
+.knowledge-card-body li { margin: 2px 0; }
+.knowledge-card-body code {
+  background: rgba(11, 58, 117, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+/* Progress / main 卡的渐变背景（按 tag 配色更精致） */
+.note.tag-bg-todo {
+  background: linear-gradient(135deg, #fffdf5 0%, #fff8e1 100%);
+  border-color: rgba(138, 90, 0, 0.14);
+}
+.note.tag-bg-progress {
+  background: linear-gradient(135deg, #f8fcf9 0%, #eaf4ed 100%);
+  border-color: rgba(27, 94, 32, 0.12);
+}
+.note.tag-bg-idea {
+  background: linear-gradient(135deg, #f8faff 0%, #eaf1fc 100%);
+  border-color: rgba(11, 58, 117, 0.12);
 }
 
 /* Markdown tables — shared by summary cards, chat bubbles, summarize modal */

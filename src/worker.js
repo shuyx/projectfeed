@@ -295,7 +295,7 @@ app.post('/api/progress', async (c) => {
   }
 
   const body = await c.req.json().catch(() => ({}));
-  const { project_id, content, source, source_ref } = body;
+  const { project_id, content, source, source_ref, override_created_at } = body;
   if (!project_id || !content || !content.trim()) {
     return c.json({ error: 'project_id and content required' }, 400);
   }
@@ -308,7 +308,14 @@ app.post('/api/progress', async (c) => {
   if (!proj) return c.json({ error: 'project_id not found' }, 404);
 
   const id = crypto.randomUUID();
-  const created_at = new Date().toISOString();
+  // override_created_at 用于迁移历史数据（保留原日期）。格式 ISO8601 或 YYYY-MM-DD
+  let created_at = new Date().toISOString();
+  if (override_created_at && /^\d{4}-\d{2}-\d{2}/.test(override_created_at)) {
+    const iso = override_created_at.length === 10
+      ? `${override_created_at}T12:00:00.000Z`   // 只给日期时默认中午 UTC
+      : override_created_at;
+    if (!Number.isNaN(new Date(iso).getTime())) created_at = iso;
+  }
 
   await c.env.DB.prepare(
     'INSERT INTO notes (id, project_id, content, card_type, source, source_ref, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
