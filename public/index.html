@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#fafaf9">
   <title>项目进展</title>
   <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="icon" href="/icon-192.png">
   <link rel="stylesheet" href="/styles.css">
@@ -17,7 +18,7 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- 主界面（单用户，无登录） -->
+  <!-- 主界面 -->
   <div id="app">
 
     <header class="app-header">
@@ -29,7 +30,7 @@
         <button id="btn-summary" class="icon-btn" title="一键整理" aria-label="整理" hidden>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M7 7l10 10M17 7L7 17"/></svg>
         </button>
-        <button id="btn-settings" class="icon-btn" title="关于" aria-label="关于">
+        <button id="btn-settings" class="icon-btn" title="设置" aria-label="设置">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
       </div>
@@ -52,44 +53,96 @@
     </footer>
   </div>
 
-  <!-- 关于 modal（只读信息页） -->
+  <!-- Tag 选择 modal（发送时弹出） -->
+  <div id="tag-modal" class="modal" hidden>
+    <div class="modal-content tag-modal-content">
+      <h3>给这条卡片打个标签</h3>
+      <p class="muted small">选一个，不能跳过</p>
+      <div class="tag-buttons">
+        <button class="tag-btn tag-todo" data-tag="todo" type="button">
+          <span class="tag-emoji">🎯</span>
+          <span class="tag-name">待办</span>
+          <span class="tag-desc">要做的动作 · 会自动同步到 Todoist</span>
+        </button>
+        <button class="tag-btn tag-progress" data-tag="progress" type="button">
+          <span class="tag-emoji">✅</span>
+          <span class="tag-name">进展</span>
+          <span class="tag-desc">已发生的事实 · 执行情况更新</span>
+        </button>
+        <button class="tag-btn tag-idea" data-tag="idea" type="button">
+          <span class="tag-emoji">💡</span>
+          <span class="tag-name">想法</span>
+          <span class="tag-desc">灵感 · 疑问 · 待判断的观察</span>
+        </button>
+      </div>
+      <div class="tag-modal-foot">
+        <button id="tag-modal-cancel" class="ghost-btn">取消</button>
+      </div>
+      <p class="muted tiny" style="text-align:center;margin-top:10px">按 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> 快速选择</p>
+    </div>
+  </div>
+
+  <!-- 通用确认 modal -->
+  <div id="confirm-modal" class="modal" hidden>
+    <div class="modal-content confirm-content">
+      <h3 id="confirm-title">确认操作</h3>
+      <p id="confirm-body" class="muted small"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="ghost-btn">取消</button>
+        <button id="confirm-ok" class="primary-btn">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置 modal（原"关于" → 重写为真设置页） -->
   <div id="settings-modal" class="modal" hidden>
     <div class="modal-content settings-content">
       <div class="settings-header">
-        <h2>关于 · projectfeed</h2>
+        <h2>⚙️ 设置</h2>
         <button id="settings-close" class="icon-btn" aria-label="关闭">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
 
       <section>
-        <h3>版本</h3>
-        <p class="muted small">v1.0 · 个人 Portfolio 进展跟踪 PWA</p>
+        <h3>🎯 默认项目 Tab</h3>
+        <p class="muted small">下次打开 App 时默认显示哪个</p>
+        <select id="settings-default-tab" class="settings-select"></select>
       </section>
 
       <section>
-        <h3>Portfolio 项目（<span id="about-project-count">12</span> 个）</h3>
-        <ul class="list" id="about-projects"></ul>
+        <h3>📤 导出 / 备份</h3>
+        <p class="muted small">生成 Markdown 文件，可通过系统分享菜单发邮件 / 存 iCloud Drive / 复制</p>
+        <select id="settings-export-project" class="settings-select"></select>
+        <select id="settings-export-tag" class="settings-select" style="margin-top:8px">
+          <option value="all">全部 tag</option>
+          <option value="todo">仅 🎯 待办</option>
+          <option value="progress">仅 ✅ 进展</option>
+          <option value="idea">仅 💡 想法</option>
+        </select>
+        <button id="settings-export-run" class="primary-btn full" style="margin-top:10px">生成并分享</button>
       </section>
 
       <section>
-        <h3>资源</h3>
+        <h3>🔄 重新拉取</h3>
+        <p class="muted small">强制刷新数据（服务端缓存或本地 sw 缓存问题时用）</p>
+        <button id="settings-hard-refresh" class="ghost-btn full">强制刷新</button>
+      </section>
+
+      <section>
+        <h3>ℹ️ 关于 projectfeed</h3>
         <p class="muted tiny" style="line-height:1.9">
-          🌐 线上：<code>projectfeed.kevinyuanxin.workers.dev</code><br>
-          📦 仓库：<code>github.com/shuyx/projectfeed</code><br>
-          💾 D1：<code>projectfeed-db</code> @ APAC<br>
-          🔄 Obsidian 同步：已挂 <code>/反馈</code> <code>/复盘</code> 「记录」
+          版本：<code>v1.3</code><br>
+          🌐 <code>projectfeed.kevinyuanxin.workers.dev</code><br>
+          📦 <code>github.com/shuyx/projectfeed</code><br>
+          💾 D1 <code>projectfeed-db</code> @ APAC<br>
+          🔄 已挂 Obsidian <code>/反馈</code> <code>/复盘</code> 「记录」<br>
+          🏷️ Tag 系统：<code>待办</code> / <code>进展</code> / <code>想法</code>（待办自动同步 Todoist）
         </p>
-      </section>
-
-      <section>
-        <h3>使用建议</h3>
-        <ul class="muted small" style="padding-left:18px;line-height:1.7">
-          <li>iPhone Safari 添加到主屏幕用，全屏无地址栏</li>
-          <li>进度卡（灰边带 📥）来自 Obsidian 同步，不可在 App 里编辑</li>
-          <li>主卡右上 🤖 问 AI → 保存知识卡挂在主卡下方</li>
-          <li>header 📊 一键整理支持主/进度/知识三种组合</li>
-        </ul>
+        <details style="margin-top:8px">
+          <summary class="muted small" style="cursor:pointer">12 个 Portfolio 项目清单</summary>
+          <ul class="list" id="about-projects" style="margin-top:8px"></ul>
+        </details>
       </section>
     </div>
   </div>
@@ -115,28 +168,27 @@
 
       <div id="sum-config">
         <section>
-          <h3>时间范围</h3>
-          <label class="radio-row">
-            <input type="radio" name="sum-time" value="7d" checked>
-            <span>最近 7 天</span>
-          </label>
-          <label class="radio-row">
-            <input type="radio" name="sum-time" value="30d">
-            <span>最近 30 天</span>
-          </label>
-          <label class="radio-row">
-            <input type="radio" name="sum-time" value="all">
-            <span>全部</span>
-          </label>
+          <h3>① 时间范围</h3>
+          <label class="radio-row"><input type="radio" name="sum-time" value="7d" checked><span>最近 7 天</span></label>
+          <label class="radio-row"><input type="radio" name="sum-time" value="30d"><span>最近 30 天</span></label>
+          <label class="radio-row"><input type="radio" name="sum-time" value="all"><span>全部</span></label>
         </section>
 
         <section>
-          <h3>项目范围</h3>
+          <h3>② 项目范围</h3>
           <div id="sum-projects-list"></div>
         </section>
 
         <section>
-          <h3>补充材料</h3>
+          <h3>③ Tag 筛选</h3>
+          <label class="radio-row"><input type="radio" name="sum-tag" value="all" checked><span>全部 tag</span></label>
+          <label class="radio-row"><input type="radio" name="sum-tag" value="todo"><span>🎯 仅待办</span></label>
+          <label class="radio-row"><input type="radio" name="sum-tag" value="progress"><span>✅ 仅进展</span></label>
+          <label class="radio-row"><input type="radio" name="sum-tag" value="idea"><span>💡 仅想法</span></label>
+        </section>
+
+        <section>
+          <h3>④ 补充材料</h3>
           <label class="radio-row" style="cursor:pointer">
             <input type="checkbox" id="sum-include-progress" checked>
             <span>📥 包含进度卡（来自 Obsidian 同步）</span>
@@ -145,8 +197,12 @@
             <input type="checkbox" id="sum-include-knowledge">
             <span>🧠 包含知识卡（AI 问答沉淀）</span>
           </label>
+          <label class="radio-row" style="cursor:pointer">
+            <input type="checkbox" id="sum-generate-suggestion" checked>
+            <span>🔮 同时生成"下一步建议"卡</span>
+          </label>
           <p class="muted tiny" style="padding:0 4px;margin-top:4px">
-            主卡永远纳入。进度卡默认勾上，知识卡默认不勾。
+            主卡永远纳入 · 建议卡不再参与未来整理
           </p>
         </section>
 
@@ -163,7 +219,12 @@
 
       <div id="sum-result" hidden>
         <div id="sum-meta" class="muted small"></div>
+        <h4 style="margin:12px 0 6px">🤖 整理</h4>
         <div id="sum-body" class="sum-body"></div>
+        <div id="sum-suggestion-section" hidden>
+          <h4 style="margin:16px 0 6px;color:#b45309">🔮 下一步建议</h4>
+          <div id="sum-suggestion" class="sum-body suggestion-body"></div>
+        </div>
         <div class="sum-actions">
           <button id="sum-close-result" class="ghost-btn">关闭</button>
           <button id="sum-save" class="primary-btn">保存为卡片</button>
@@ -205,14 +266,8 @@
       </div>
       <p class="muted small">对比原文和 AI 建议，确认无误后采纳。AI 可能误判，你来做最终判断。</p>
       <div class="correct-compare">
-        <div class="correct-block before">
-          <span class="correct-block-label">原文</span>
-          <div id="correct-before"></div>
-        </div>
-        <div class="correct-block after">
-          <span class="correct-block-label">AI 建议</span>
-          <div id="correct-after"></div>
-        </div>
+        <div class="correct-block before"><span class="correct-block-label">原文</span><div id="correct-before"></div></div>
+        <div class="correct-block after"><span class="correct-block-label">AI 建议</span><div id="correct-after"></div></div>
       </div>
       <div class="sum-actions">
         <button id="correct-reject" class="ghost-btn">保持原文</button>
@@ -221,12 +276,9 @@
     </div>
   </div>
 
-  <!-- Register service worker for PWA -->
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {});
-      });
+      window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
     }
   </script>
   <script src="/app.js"></script>
