@@ -974,6 +974,19 @@ ${summary}`;
 // Static fallback
 // ============================================================
 
-app.all('*', async (c) => c.env.ASSETS.fetch(c.req.raw));
+// v1.16.1: 对 HTML/JS/CSS/sw.js 强制 private + no-store，阻止运营商透明代理缓存
+// （5G 下用户报告看到旧版，CF 默认的 public+must-revalidate 允许了中间代理保留副本）
+// 图片/manifest 保持默认（可缓存，节省流量）
+app.all('*', async (c) => {
+  const res = await c.env.ASSETS.fetch(c.req.raw);
+  const p = new URL(c.req.url).pathname;
+  const needNoStore = p === '/' || p.endsWith('.html') || p.endsWith('.js') || p.endsWith('.css');
+  if (!needNoStore) return res;
+  const h = new Headers(res.headers);
+  h.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+  h.set('Pragma', 'no-cache');
+  h.set('Expires', '0');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
+});
 
 export default app;

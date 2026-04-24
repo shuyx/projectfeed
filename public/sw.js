@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16 (cross-project move / copy via ⋯ menu)
+// projectfeed Service Worker · build 2026-04-24 v1.16.1 (force no-store for HTML/JS/CSS, fix 5G stale cache)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
