@@ -1501,3 +1501,170 @@ input, textarea {
   font-size: 12px;
 }
 .login-footer-links a:hover { color: var(--muted); }
+
+/* ============================================================
+   v1.3 — Tag system · Suggestion card · Confirm modal · Settings
+   ============================================================ */
+
+/* Tag 胶囊徽章（note-head 显示） */
+.tag-badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tag-badge.tag-todo { background: #fff3cd; color: #8a5a00; }
+.tag-badge.tag-progress { background: #d1f2e1; color: #1b5e20; }
+.tag-badge.tag-idea { background: #d7e8ff; color: #0b3a75; }
+
+/* 主卡按 tag 染背景色 */
+.note.tag-bg-todo { background: #fffdf5; border-color: rgba(138,90,0,0.12); }
+.note.tag-bg-progress { background: #f5fbf6; border-color: rgba(27,94,32,0.10); }
+.note.tag-bg-idea { background: #f6f9fd; border-color: rgba(11,58,117,0.10); }
+
+/* Suggestion card · 橙渐变 + 左边条 */
+.note.is-suggestion {
+  background: linear-gradient(135deg, #fffbf4 0%, #fff2df 100%);
+  border-color: rgba(180, 83, 9, 0.2);
+  border-left: 3px solid #b45309;
+}
+.suggestion-badge {
+  padding: 2px 8px;
+  background: #fff4e6;
+  color: #b45309;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.suggestion-body {
+  background: rgba(180, 83, 9, 0.04);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border-left: 2px solid #b45309;
+  margin-top: 4px;
+}
+
+/* Todoist 状态按钮 */
+.todoist-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  transition: background 0.12s;
+}
+.todoist-btn.synced:hover { background: var(--accent-soft); }
+.todoist-btn.failed { animation: pulse-warn 1.8s ease-in-out infinite; }
+.todoist-btn.failed:hover { background: #fee; animation: none; }
+@keyframes pulse-warn {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+/* Tag picker modal */
+.tag-modal-content {
+  max-width: 380px;
+  padding: 24px 20px;
+  text-align: center;
+}
+.tag-modal-content h3 { margin: 0 0 4px; font-size: 17px; }
+
+.tag-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.tag-btn {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 2px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  text-align: left;
+  background: var(--surface);
+  font-family: var(--font-sys);
+  transition: transform 0.08s ease, border-color 0.12s ease, background 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.tag-btn:active { transform: scale(0.98); }
+.tag-btn.tag-todo:hover { border-color: #e3b02b; background: #fff9e6; }
+.tag-btn.tag-progress:hover { border-color: #4caf50; background: #edf8f0; }
+.tag-btn.tag-idea:hover { border-color: #4a7fcb; background: #edf3fc; }
+.tag-btn .tag-emoji { grid-row: 1 / 3; font-size: 30px; justify-self: center; align-self: center; }
+.tag-btn .tag-name { font-size: 16px; font-weight: 700; color: var(--ink); }
+.tag-btn .tag-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+.tag-modal-foot { margin-top: 4px; }
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: var(--font-sys);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--ink-2);
+}
+
+/* Confirm modal */
+.confirm-content {
+  max-width: 340px;
+  padding: 22px 20px;
+  text-align: center;
+}
+.confirm-content h3 { margin: 0 0 10px; font-size: 17px; color: var(--ink); }
+.confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 18px;
+}
+.primary-btn.danger {
+  background: var(--danger);
+  color: #fff;
+}
+.primary-btn.danger:hover:not(:disabled) { background: #7f1d1d; }
+
+/* Settings · select + list */
+.settings-select {
+  width: 100%;
+  padding: 10px 12px;
+  margin-top: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-family: var(--font-sys);
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 5l3 3 3-3' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.primary-btn.full { width: 100%; }
+.ghost-btn.full { width: 100%; padding: 10px; }
+
+.list { list-style: none; padding: 0; margin: 4px 0; }
+.list li {
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: var(--r-sm);
+}
+.list li.about-prio-head { padding: 8px 0 2px; background: transparent; }

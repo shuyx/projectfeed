@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.2 · sw network-first for JS/CSS (no more stale cache)
+// projectfeed app.js — v1.3 · tag system + suggestion card + export + settings
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -76,11 +76,15 @@ async function loadFeed(append = false) {
   }
 }
 
-async function postNote(project_id, content) {
+async function postNote(project_id, content, tag) {
   return api('/api/notes', {
     method: 'POST',
-    body: JSON.stringify({ project_id, content }),
+    body: JSON.stringify({ project_id, content, tag }),
   });
+}
+
+async function retryTodoistSync(noteId) {
+  return api(`/api/notes/${noteId}/retry-todoist`, { method: 'POST' });
 }
 
 async function deleteNote(id) {
@@ -331,14 +335,22 @@ function renderFeed() {
         const proj = projectMap[n.project_id];
         const projLabel = proj ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}` : escapeHtml(n.project_id);
         const isSummary = n.card_type === 'summary';
+        const isSuggestion = n.card_type === 'suggestion';
         const isProgress = n.card_type === 'progress';
         const isMain = n.card_type === 'main' || !n.card_type;
         const children = Array.isArray(n.children) ? n.children : [];
         const knowledgeHtml = children.length
           ? `<div class="knowledge-cards" data-parent="${escapeHtml(n.id)}">${children.map(renderKnowledgeCard).join('')}</div>`
           : '';
+
+        // Tag badge（主卡手动打的，以及 progress 卡自动的）
+        const tagMap = { todo: { icon: '🎯', label: '待办' }, progress: { icon: '✅', label: '进展' }, idea: { icon: '💡', label: '想法' } };
+        const tagInfo = n.tag ? tagMap[n.tag] : null;
+        const tagBadge = tagInfo ? `<span class="tag-badge tag-${n.tag}">${tagInfo.icon} ${tagInfo.label}</span>` : '';
+
         let kindBadge = '';
         if (isSummary) kindBadge = '<span class="summary-badge">🤖 AI 整理</span>';
+        else if (isSuggestion) kindBadge = '<span class="suggestion-badge">🔮 下一步建议</span>';
         else if (isProgress) {
           const srcLabel = n.source === 'feedback' ? '反馈'
                           : n.source === 'recap' ? '复盘'
@@ -346,18 +358,34 @@ function renderFeed() {
                           : '同步';
           kindBadge = `<span class="progress-badge">📥 ${srcLabel}</span>`;
         }
+
+        // Todoist 状态按钮（仅 tag=todo 的主卡）
+        let todoistBtn = '';
+        if (isMain && n.tag === 'todo') {
+          if (n.todoist_task_id) {
+            todoistBtn = `<button class="todoist-btn synced" data-synced="1" title="已同步 Todoist" aria-label="Todoist">🔗</button>`;
+          } else {
+            todoistBtn = `<button class="todoist-btn failed" title="同步 Todoist 失败，点击重试" aria-label="重试 Todoist">⚠️</button>`;
+          }
+        }
+
         const classes = ['note'];
         if (isSummary) classes.push('is-summary');
+        if (isSuggestion) classes.push('is-suggestion');
         if (isProgress) classes.push('is-progress');
+        if (isMain && n.tag) classes.push(`tag-bg-${n.tag}`);
+
         return `
           <article class="${classes.join(' ')}" data-id="${escapeHtml(n.id)}">
             <div class="note-head">
+              ${tagBadge}
               ${kindBadge}
+              ${todoistBtn}
               ${isMain ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
-              <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+              ${!isSuggestion ? '<button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>' : ''}
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
-            <div class="note-body">${isSummary ? applyInlineHighlights(renderMarkdown(n.content)) : highlightContent(n.content)}</div>
+            <div class="note-body">${(isSummary || isSuggestion) ? applyInlineHighlights(renderMarkdown(n.content)) : highlightContent(n.content)}</div>
             <div class="note-foot">
               <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}</span>
               ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
@@ -380,7 +408,7 @@ function renderFeed() {
       const noteEl = e.target.closest('.note');
       if (!noteEl) return;
       const id = noteEl.dataset.id;
-      if (!confirm('确认删除这条？挂载的知识卡也会一并删除')) return;
+      if (!(await showConfirm('删除主卡', '确认删除这条？挂载的知识卡也会一并删除。', { okText: '删除', danger: true }))) return;
       try {
         await deleteNote(id);
         state.notes = state.notes.filter(n => n.id !== id);
@@ -410,6 +438,44 @@ function renderFeed() {
     });
   });
 
+  // Todoist retry / open
+  el.querySelectorAll('.note .todoist-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const noteEl = e.target.closest('.note');
+      if (!noteEl) return;
+      const id = noteEl.dataset.id;
+      if (btn.dataset.synced) {
+        // 已同步 → 打开 Todoist（手机上会跳 App）
+        const n = state.notes.find(x => x.id === id);
+        if (n?.todoist_task_id) {
+          window.open(`https://todoist.com/showTask?id=${n.todoist_task_id}`, '_blank');
+        }
+        return;
+      }
+      // 失败 → 重试
+      btn.textContent = '…';
+      btn.disabled = true;
+      try {
+        const res = await retryTodoistSync(id);
+        if (res?.todoist_sync?.status === 'ok') {
+          toast('已重试 · Todoist 同步成功');
+          const idx = state.notes.findIndex(x => x.id === id);
+          if (idx >= 0) state.notes[idx].todoist_task_id = res.todoist_sync.task_id;
+          renderFeed();
+        } else {
+          toast('重试失败：' + (res?.todoist_sync?.error || '未知错误'), true);
+          btn.textContent = '⚠️';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        toast('重试失败：' + err.message, true);
+        btn.textContent = '⚠️';
+        btn.disabled = false;
+      }
+    });
+  });
+
   // Knowledge card toggle
   el.querySelectorAll('.knowledge-card-head').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -431,7 +497,7 @@ function renderFeed() {
       const id = card?.dataset.id;
       const parentId = parentWrap?.dataset.parent;
       if (!id || !parentId) return;
-      if (!confirm('删除这张知识卡？')) return;
+      if (!(await showConfirm('删除知识卡', '确认删除这张知识卡？', { okText: '删除', danger: true }))) return;
       try {
         await deleteNote(id);
         const parent = state.notes.find(n => n.id === parentId);
@@ -927,21 +993,96 @@ function setupComposer() {
       if (!projectId) return;
     }
 
+    // 新增：先选 tag
+    const tag = await pickTag();
+    if (!tag) return;
+
     btn.disabled = true;
     try {
-      const note = await postNote(projectId, content);
+      const note = await postNote(projectId, content, tag);
       state.notes.unshift(note);
       input.value = '';
       input.style.height = 'auto';
       renderFeed();
       updateSendBtn();
       input.focus();
+
+      // Todoist 同步结果反馈
+      if (note.todoist_sync) {
+        const s = note.todoist_sync;
+        if (s.status === 'ok') toast('已发送 · 同步 Todoist ✅');
+        else if (s.status === 'failed') toast('已发送 · Todoist 同步失败，可点 ⚠️ 重试', true);
+        else if (s.status === 'skipped') toast('已发送 · Todoist 映射缺失，跳过');
+      } else {
+        toast('已发送');
+      }
     } catch (err) {
       toast('发布失败：' + err.message, true);
     } finally {
       updateSendBtn();
     }
   }
+}
+
+// ---------- Tag picker ----------
+function pickTag() {
+  return new Promise((resolve) => {
+    const modal = $('tag-modal');
+    if (!modal) { resolve('progress'); return; }
+    modal.hidden = false;
+
+    const done = (tag) => {
+      modal.hidden = true;
+      document.removeEventListener('keydown', keyHandler);
+      resolve(tag);
+    };
+    const keyHandler = (e) => {
+      if (e.key === '1') done('todo');
+      else if (e.key === '2') done('progress');
+      else if (e.key === '3') done('idea');
+      else if (e.key === 'Escape') done(null);
+    };
+    document.addEventListener('keydown', keyHandler);
+
+    modal.querySelectorAll('.tag-btn').forEach((btn) => {
+      btn.onclick = () => done(btn.dataset.tag);
+    });
+    $('tag-modal-cancel').onclick = () => done(null);
+  });
+}
+
+// ---------- Generic confirm modal (replaces window.confirm) ----------
+function showConfirm(title, body, { okText = '确认', cancelText = '取消', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const modal = $('confirm-modal');
+    if (!modal) { resolve(window.confirm(`${title}\n\n${body}`)); return; }
+    $('confirm-title').textContent = title;
+    $('confirm-body').textContent = body || '';
+    const okBtn = $('confirm-ok');
+    const cancelBtn = $('confirm-cancel');
+    okBtn.textContent = okText;
+    cancelBtn.textContent = cancelText;
+    okBtn.className = danger ? 'primary-btn danger' : 'primary-btn';
+    modal.hidden = false;
+
+    const cleanup = (result) => {
+      modal.hidden = true;
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      modal.onclick = null;
+      document.removeEventListener('keydown', keyHandler);
+      resolve(result);
+    };
+    const keyHandler = (e) => {
+      if (e.key === 'Escape') cleanup(false);
+      else if (e.key === 'Enter') cleanup(true);
+    };
+    document.addEventListener('keydown', keyHandler);
+
+    okBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+    modal.onclick = (e) => { if (e.target === modal) cleanup(false); };
+  });
 }
 
 function pickProject() {
@@ -988,22 +1129,34 @@ let lastSummary = null;
 async function runSummarize() {
   const timeRange = document.querySelector('input[name="sum-time"]:checked')?.value || '7d';
   const project = document.querySelector('input[name="sum-proj"]:checked')?.value || state.currentTab;
+  const tag_filter = document.querySelector('input[name="sum-tag"]:checked')?.value || 'all';
   const include_progress = !!$('sum-include-progress')?.checked;
   const include_knowledge = !!$('sum-include-knowledge')?.checked;
+  const generate_suggestion = !!$('sum-generate-suggestion')?.checked;
   $('sum-config').hidden = true;
   $('sum-loading').hidden = false;
   try {
-    const data = await summarize(timeRange, project, include_progress, include_knowledge);
+    const data = await api('/api/summarize', {
+      method: 'POST',
+      body: JSON.stringify({ timeRange, project, tag_filter, include_progress, include_knowledge, generate_suggestion }),
+    });
     lastSummary = { ...data, timeRange, project };
     $('sum-loading').hidden = true;
     $('sum-result').hidden = false;
     const meta = data.meta || {};
     const tags = [];
+    if (meta.tag_filter && meta.tag_filter !== 'all') tags.push(`tag=${meta.tag_filter}`);
     if (meta.include_progress) tags.push('含进度卡');
     if (meta.include_knowledge) tags.push('含知识卡');
     const tagStr = tags.length ? ' · ' + tags.join(' · ') : '';
     $('sum-meta').textContent = `近 ${meta.days} 天 · ${meta.project === 'all' ? '全部项目' : meta.project} · ${meta.noteCount} 条${tagStr}`;
     $('sum-body').innerHTML = applyInlineHighlights(renderMarkdown(data.summary || ''));
+    if (data.suggestion) {
+      $('sum-suggestion-section').hidden = false;
+      $('sum-suggestion').innerHTML = applyInlineHighlights(renderMarkdown(data.suggestion));
+    } else {
+      $('sum-suggestion-section').hidden = true;
+    }
   } catch (e) {
     $('sum-loading').hidden = true;
     $('sum-config').hidden = false;
@@ -1014,20 +1167,81 @@ async function runSummarize() {
 async function saveSummaryAsCard() {
   if (!lastSummary) return;
   const meta = lastSummary.meta || {};
-  const header = `📊 近 ${meta.days} 天整理（${meta.project === 'all' ? '全部项目' : meta.project}） · 共 ${meta.noteCount} 条\n\n`;
-  const content = header + (lastSummary.summary || '');
   const projectId = (meta.project === 'all') ? (state.projects[0]?.id || 'ai-cap') : meta.project;
+  const header = `📊 近 ${meta.days} 天整理（${meta.project === 'all' ? '全部项目' : meta.project}） · 共 ${meta.noteCount} 条\n\n`;
+  const summaryContent = header + (lastSummary.summary || '');
+
+  const saveBtn = $('sum-save');
+  if (saveBtn) saveBtn.disabled = true;
   try {
-    const note = await api('/api/notes', {
+    const summaryNote = await api('/api/notes', {
       method: 'POST',
-      body: JSON.stringify({ project_id: projectId, content, card_type: 'summary' }),
+      body: JSON.stringify({ project_id: projectId, content: summaryContent, card_type: 'summary' }),
     });
-    state.notes.unshift(note);
+    state.notes.unshift(summaryNote);
+
+    // 如果有建议卡，一并保存
+    if (lastSummary.suggestion) {
+      const suggestionContent = `🔮 下一步建议（基于上方 ${meta.noteCount} 条记录的 AI 整理）\n\n${lastSummary.suggestion}`;
+      try {
+        const sNote = await api('/api/notes', {
+          method: 'POST',
+          body: JSON.stringify({ project_id: projectId, content: suggestionContent, card_type: 'suggestion' }),
+        });
+        state.notes.unshift(sNote);
+      } catch (e2) {
+        // 建议卡保存失败不影响 summary 卡
+        toast('整理已保存，建议卡保存失败：' + e2.message, true);
+      }
+    }
+
     renderFeed();
     closeSummarize();
-    toast('已保存为卡片');
+    toast(lastSummary.suggestion ? '已保存 2 张卡片（整理+建议）' : '已保存为卡片');
   } catch (e) {
     toast('保存失败：' + e.message, true);
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+// ---------- Export (MD via navigator.share or download) ----------
+async function runExport() {
+  const project = $('settings-export-project')?.value || 'all';
+  const tag = $('settings-export-tag')?.value || 'all';
+  const btn = $('settings-export-run');
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  try {
+    const resp = await fetch(`/api/export?project=${encodeURIComponent(project)}&tag=${encodeURIComponent(tag)}&format=md`);
+    if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+    const md = await resp.text();
+    const now = new Date().toISOString().slice(0, 10);
+    const filename = `projectfeed-${project}-${now}.md`;
+
+    // iOS Safari 原生分享优先（支持邮件 / 存文件 / 复制）
+    if (navigator.share && navigator.canShare) {
+      const file = new File([md], filename, { type: 'text/markdown' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'projectfeed 导出', text: filename });
+        toast('已打开分享菜单');
+        return;
+      }
+    }
+    // fallback: 浏览器下载
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('已下载：' + filename);
+  } catch (e) {
+    toast('导出失败：' + e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '生成并分享'; }
   }
 }
 
@@ -1116,21 +1330,67 @@ function renderMarkdown(md) {
   return html;
 }
 
-// ---------- About / Settings modal (info-only) ----------
+// ---------- Settings modal ----------
+const DEFAULT_TAB_KEY = 'projectfeed.default-tab';
+
 function setupSettings() {
   $('btn-settings')?.addEventListener('click', openSettings);
   $('settings-close')?.addEventListener('click', closeSettings);
   $('settings-modal')?.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeSettings();
   });
+  $('settings-default-tab')?.addEventListener('change', (e) => {
+    localStorage.setItem(DEFAULT_TAB_KEY, e.target.value);
+    const label = e.target.selectedOptions[0]?.textContent || e.target.value;
+    toast(`默认 Tab → ${label}`);
+  });
+  $('settings-export-run')?.addEventListener('click', runExport);
+  $('settings-hard-refresh')?.addEventListener('click', async () => {
+    if (!(await showConfirm('强制刷新', '将清除本地 Service Worker 缓存并重新加载。继续？'))) return;
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const r of regs) await r.unregister();
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } finally {
+      location.reload();
+    }
+  });
 }
 
 function openSettings() {
+  renderSettingsSelects();
   renderAboutProjects();
   $('settings-modal').hidden = false;
 }
 function closeSettings() {
   $('settings-modal').hidden = true;
+}
+
+function renderSettingsSelects() {
+  const defaultTabEl = $('settings-default-tab');
+  const exportProjEl = $('settings-export-project');
+  if (defaultTabEl) {
+    const cur = localStorage.getItem(DEFAULT_TAB_KEY) || 'all';
+    let opts = `<option value="all"${cur === 'all' ? ' selected' : ''}>全部</option>`;
+    for (const p of state.projects) {
+      const label = `${p.emoji || ''} ${p.name}`.trim();
+      opts += `<option value="${escapeHtml(p.id)}"${cur === p.id ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    }
+    defaultTabEl.innerHTML = opts;
+  }
+  if (exportProjEl) {
+    let opts = `<option value="all">全部项目</option>`;
+    for (const p of state.projects) {
+      const label = `${p.emoji || ''} ${p.name}`.trim();
+      opts += `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
+    }
+    exportProjEl.innerHTML = opts;
+  }
 }
 function renderAboutProjects() {
   const el = $('about-projects');
@@ -1185,14 +1445,24 @@ async function initApp() {
   $('app').hidden = false;
   $('btn-summary').hidden = false;
   try {
+    // 读 localStorage 的默认 tab 偏好
+    const defaultTab = localStorage.getItem(DEFAULT_TAB_KEY);
+    if (defaultTab && defaultTab !== 'all') state.currentTab = defaultTab;
+
     await loadConfig();
+
+    // 验证 default tab 仍然合法（项目可能被删）
+    if (state.currentTab !== 'all' && !state.projects.some(p => p.id === state.currentTab)) {
+      state.currentTab = 'all';
+    }
+
     renderTabs();
     renderSumProjects();
     await loadFeed();
     renderFeed();
   } catch (e) {
     console.error('[init]', e);
-    toast('初始化失败：' + e.message, true);
+    toast('初始化失败：' + (e.stack || e.message), true);
   }
 }
 

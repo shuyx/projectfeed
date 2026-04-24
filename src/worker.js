@@ -13,6 +13,68 @@ function getSyncSecret(env) {
   return env.SYNC_SECRET || 'local-dev-sync-secret';
 }
 
+// projectfeed.id → Todoist project id（与 Obsidian _Portfolio/.todoist-config.json 一致）
+const TODOIST_PROJECT_MAP = {
+  'xiangcheng':      '6gQ8gmjjC6Pfx4Wc',
+  'dechuang-robot':  '6gQ8gp2QR2PMChrv',
+  'bci':             '6gQ8gp358vrfprc6',
+  'dechuang-sched':  '6gQ8gp664f6cWFmx',
+  'nantong':         '6gQ8gpH57Wvcr9vM',
+  'kuangchuang':     '6gQhVJWVxHFjF95C',
+  'drone':           '6gQ8gpJwGv8gGfRQ',
+  'embodied-data':   '6gQ8gpQCMQ5Xxq9R',
+  'fmea':            '6gQ8gpXgcgmWr3RX',
+  'emba':            '6gQ8gpf3gFrXfwvV',
+  'ai-cap':          '6gQ8gprw8Jrf2h7Q',
+  'personal':        '6gQ8gpxc7HwpFr3J',
+};
+
+const VALID_TAGS = ['todo', 'progress', 'idea'];
+
+async function createTodoistTask(env, { content, description, projectId }) {
+  if (!env.TODOIST_API_TOKEN) return { ok: false, error: 'TODOIST_API_TOKEN not set' };
+  try {
+    const resp = await fetch('https://api.todoist.com/api/v1/tasks', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.TODOIST_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        content,
+        description: description || '',
+        project_id: projectId,
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      return { ok: false, error: `${resp.status}: ${err.slice(0, 200)}` };
+    }
+    const data = await resp.json();
+    return { ok: true, task_id: data.id, url: data.url };
+  } catch (e) {
+    return { ok: false, error: e.message || 'network error' };
+  }
+}
+
+async function syncTodoForTodoistTag(c, { noteId, projectId, content }) {
+  const todoistProjectId = TODOIST_PROJECT_MAP[projectId];
+  if (!todoistProjectId) return { status: 'skipped', reason: 'no_mapping' };
+
+  const firstLine = String(content).split('\n').find((l) => l.trim()) || content;
+  const title = firstLine.slice(0, 80);
+  const rest = content.slice(title.length).trim();
+  const desc = (rest ? rest.slice(0, 800) + (rest.length > 800 ? '...' : '') + '\n\n' : '') +
+    `📱 from projectfeed · ${new Date().toISOString().slice(0, 10)}`;
+
+  const r = await createTodoistTask(c.env, { content: title, description: desc, projectId: todoistProjectId });
+  if (r.ok) {
+    await c.env.DB.prepare('UPDATE notes SET todoist_task_id = ? WHERE id = ?').bind(r.task_id, noteId).run();
+    return { status: 'ok', task_id: r.task_id, url: r.url };
+  }
+  return { status: 'failed', error: r.error };
+}
+
 async function callMinimax(c, { messages, system, user, temperature = 0.3, max_tokens = 1200 }) {
   const apiKey = c.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error('LLM 未配置：需要设置 MINIMAX_API_KEY');
@@ -97,11 +159,11 @@ app.get('/api/notes', async (c) => {
 
 app.post('/api/notes', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const { project_id: rawProjectId, content, parent_id, card_type: rawCardType } = body;
+  const { project_id: rawProjectId, content, parent_id, card_type: rawCardType, tag: rawTag } = body;
   if (!content || !content.trim()) return c.json({ error: 'content required' }, 400);
 
   let card_type = rawCardType || (parent_id ? 'knowledge' : 'main');
-  if (!['main', 'knowledge', 'summary'].includes(card_type)) {
+  if (!['main', 'knowledge', 'summary', 'suggestion'].includes(card_type)) {
     return c.json({ error: 'invalid card_type' }, 400);
   }
 
@@ -119,14 +181,45 @@ app.post('/api/notes', async (c) => {
     if (!project_id) return c.json({ error: 'project_id required' }, 400);
   }
 
+  // tag：仅 main 卡有效
+  let tag = null;
+  if (card_type === 'main') {
+    if (rawTag && !VALID_TAGS.includes(rawTag)) {
+      return c.json({ error: `invalid tag (must be one of ${VALID_TAGS.join('/')})` }, 400);
+    }
+    tag = rawTag || 'progress';   // 未指定默认 progress（兼容旧客户端）
+  }
+
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
 
   await c.env.DB.prepare(
-    'INSERT INTO notes (id, project_id, content, card_type, parent_id, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(id, project_id, content, card_type, parentIdFinal, created_at).run();
+    'INSERT INTO notes (id, project_id, content, card_type, parent_id, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, project_id, content, card_type, parentIdFinal, tag, created_at).run();
 
-  return c.json({ id, project_id, content, card_type, parent_id: parentIdFinal, created_at });
+  // tag === 'todo' 自动同步 Todoist
+  let todoistSync = null;
+  if (card_type === 'main' && tag === 'todo') {
+    todoistSync = await syncTodoForTodoistTag(c, { noteId: id, projectId: project_id, content });
+  }
+
+  return c.json({
+    id, project_id, content, card_type, parent_id: parentIdFinal, tag, created_at,
+    ...(todoistSync ? { todoist_sync: todoistSync } : {}),
+  });
+});
+
+// 重试 Todoist 同步（卡片上的 ⚠️ 失败重试按钮调这个）
+app.post('/api/notes/:id/retry-todoist', async (c) => {
+  const id = c.req.param('id');
+  const note = await c.env.DB.prepare(
+    'SELECT id, project_id, content, tag, todoist_task_id FROM notes WHERE id = ?'
+  ).bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (note.tag !== 'todo') return c.json({ error: 'not a todo card' }, 400);
+  if (note.todoist_task_id) return c.json({ error: 'already synced', task_id: note.todoist_task_id }, 409);
+  const r = await syncTodoForTodoistTag(c, { noteId: id, projectId: note.project_id, content: note.content });
+  return c.json({ todoist_sync: r });
 });
 
 app.put('/api/notes/:id', async (c) => {
@@ -186,10 +279,90 @@ app.post('/api/progress', async (c) => {
   const created_at = new Date().toISOString();
 
   await c.env.DB.prepare(
-    'INSERT INTO notes (id, project_id, content, card_type, source, source_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, project_id, content, 'progress', source || 'manual', source_ref || null, created_at).run();
+    'INSERT INTO notes (id, project_id, content, card_type, source, source_ref, tag, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, project_id, content, 'progress', source || 'manual', source_ref || null, 'progress', created_at).run();
 
-  return c.json({ id, card_type: 'progress', project_id, source, source_ref, created_at });
+  return c.json({ id, card_type: 'progress', tag: 'progress', project_id, source, source_ref, created_at });
+});
+
+// ============================================================
+// Export (Markdown) — for backup + sharing
+// ============================================================
+
+app.get('/api/export', async (c) => {
+  const project = c.req.query('project') || 'all';
+  const tag = c.req.query('tag') || 'all';
+  const format = c.req.query('format') || 'md';
+  if (format !== 'md') return c.json({ error: 'only md supported' }, 400);
+
+  const projects = await c.env.DB.prepare('SELECT id, name, emoji, priority FROM projects ORDER BY sort_order').all();
+  const projMap = Object.fromEntries((projects.results || []).map(p => [p.id, p]));
+
+  let sql, binds;
+  const tagCondition = (tag && tag !== 'all') ? ' AND tag = ?' : '';
+  if (project === 'all') {
+    sql = `SELECT * FROM notes WHERE parent_id IS NULL${tagCondition} ORDER BY project_id, created_at DESC LIMIT 2000`;
+    binds = tag !== 'all' ? [tag] : [];
+  } else {
+    sql = `SELECT * FROM notes WHERE parent_id IS NULL AND project_id = ?${tagCondition} ORDER BY created_at DESC LIMIT 2000`;
+    binds = tag !== 'all' ? [project, tag] : [project];
+  }
+  const { results: notes } = await c.env.DB.prepare(sql).bind(...binds).all();
+
+  // Attach knowledge children
+  let children = [];
+  if (notes && notes.length) {
+    const ids = notes.map(n => n.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const childRes = await c.env.DB.prepare(
+      `SELECT * FROM notes WHERE parent_id IN (${placeholders}) ORDER BY created_at ASC`
+    ).bind(...ids).all();
+    children = childRes.results || [];
+  }
+  const byParent = {};
+  for (const k of children) (byParent[k.parent_id] = byParent[k.parent_id] || []).push(k);
+
+  // Group by project
+  const groups = {};
+  for (const n of (notes || [])) {
+    (groups[n.project_id] = groups[n.project_id] || []).push(n);
+  }
+
+  const now = new Date();
+  const ts = now.toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  let md = `# projectfeed 导出\n\n> 导出时间：${now.toISOString().slice(0, 16).replace('T', ' ')}\n> 范围：${project === 'all' ? '全部项目' : projMap[project]?.name || project}`;
+  if (tag !== 'all') md += ` · 仅 tag=${tag}`;
+  md += `\n> 条目数：${notes?.length || 0}\n\n---\n`;
+
+  const tagLabel = { todo: '🎯 待办', progress: '✅ 进展', idea: '💡 想法' };
+  const typeLabel = { main: '主卡', progress: '📥 进度卡', summary: '🤖 整理', suggestion: '🔮 建议', knowledge: '🧠 知识' };
+
+  for (const pid of Object.keys(groups)) {
+    const p = projMap[pid];
+    md += `\n\n## ${p?.emoji || ''} ${p?.name || pid}${p?.priority ? ` [${p.priority}]` : ''}\n`;
+    for (const n of groups[pid]) {
+      const date = (n.created_at || '').slice(0, 10);
+      const time = (n.created_at || '').slice(11, 16);
+      const tagBadge = n.tag ? tagLabel[n.tag] || n.tag : '';
+      const typeBadge = typeLabel[n.card_type] || n.card_type || '';
+      md += `\n### ${date} ${time} · ${typeBadge}${tagBadge ? ' · ' + tagBadge : ''}\n\n`;
+      md += `${n.content}\n`;
+      if (n.updated_at) md += `\n> _编辑于 ${(n.updated_at || '').slice(0, 16).replace('T', ' ')}_\n`;
+      if (n.source) md += `\n> _来源：${n.source}${n.source_ref ? ' · ' + n.source_ref : ''}_\n`;
+      if (n.todoist_task_id) md += `\n> _Todoist: ${n.todoist_task_id}_\n`;
+      const kids = byParent[n.id] || [];
+      for (const k of kids) {
+        md += `\n<details>\n<summary>🧠 ${(k.content.split('\n')[0] || '').slice(0, 60)}</summary>\n\n${k.content}\n\n</details>\n`;
+      }
+    }
+  }
+
+  return new Response(md, {
+    headers: {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="projectfeed-${project}-${ts}.md"`,
+    },
+  });
 });
 
 // ============================================================
@@ -347,47 +520,56 @@ app.post('/api/summarize', async (c) => {
   const {
     timeRange = '7d',
     project = 'all',
-    include_progress = true,   // default: 主 + 进度
+    include_progress = true,
     include_knowledge = false,
+    tag_filter = 'all',           // 'all' | 'todo' | 'progress' | 'idea'
+    generate_suggestion = true,
   } = body;
   const days = timeRange === '30d' ? 30 : timeRange === 'all' ? 3650 : 7;
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
 
+  // 永远排除 summary 和 suggestion（避免 AI 总结 AI 的产出）
   const allowed = ['main'];
   if (include_progress) allowed.push('progress');
   if (include_knowledge) allowed.push('knowledge');
   const placeholders = allowed.map(() => '?').join(',');
 
+  const tagCondition = (tag_filter && tag_filter !== 'all') ? ' AND tag = ?' : '';
+
   let sql, binds;
   if (project === 'all') {
-    sql = `SELECT * FROM notes WHERE created_at >= ? AND card_type IN (${placeholders}) ORDER BY created_at ASC LIMIT 500`;
-    binds = [cutoff, ...allowed];
+    sql = `SELECT * FROM notes WHERE created_at >= ? AND card_type IN (${placeholders})${tagCondition} ORDER BY created_at ASC LIMIT 500`;
+    binds = tag_filter !== 'all' ? [cutoff, ...allowed, tag_filter] : [cutoff, ...allowed];
   } else {
-    sql = `SELECT * FROM notes WHERE created_at >= ? AND project_id = ? AND card_type IN (${placeholders}) ORDER BY created_at ASC LIMIT 500`;
-    binds = [cutoff, project, ...allowed];
+    sql = `SELECT * FROM notes WHERE created_at >= ? AND project_id = ? AND card_type IN (${placeholders})${tagCondition} ORDER BY created_at ASC LIMIT 500`;
+    binds = tag_filter !== 'all' ? [cutoff, project, ...allowed, tag_filter] : [cutoff, project, ...allowed];
   }
   const { results } = await c.env.DB.prepare(sql).bind(...binds).all();
 
   if (!results || !results.length) {
-    return c.json({ error: '所选范围内没有数据' }, 400);
+    return c.json({ error: '所选范围内没有数据（检查 tag / 项目 / 时间）' }, 400);
   }
 
+  const tagLabel = { todo: '[待办]', progress: '[进展]', idea: '[想法]' };
+  const typeLabel = { knowledge: '[知识]', progress: '[进度]', main: '' };
   const lines = results.map(n => {
-    const tag = n.card_type === 'knowledge' ? '[知识]' : n.card_type === 'progress' ? '[进度]' : '';
-    return `[${n.created_at.slice(0, 10)}] ${tag}${n.content}`;
+    const ttag = n.tag ? (tagLabel[n.tag] || '') : '';
+    const ttype = typeLabel[n.card_type] || '';
+    return `[${n.created_at.slice(0, 10)}] ${ttype}${ttag}${n.content}`;
   }).join('\n');
 
   const parts = ['主卡'];
   if (include_progress) parts.push('进度卡');
   if (include_knowledge) parts.push('知识卡');
+  const tagTagStr = tag_filter === 'all' ? '' : ` · 仅 ${tag_filter}`;
 
-  const prompt = `你是个人项目进展整理助手。以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}）。请输出结构化摘要：
+  const summaryPrompt = `你是个人项目进展整理助手。以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}${tagTagStr}）。请输出结构化摘要：
 
 1. **关键进展**（3-5 条，含具体数字/人物）
 2. **待办和风险**（从未完成事项识别）
 3. **决策与洞察**（关键决策、认知更新）
 
-要求：中文，直接输出 Markdown，不加"好的我来"开场白。保留原文数字和专有名词。${include_progress ? '标记 [进度] 的来自 Obsidian 同步的反馈/复盘/胶囊。' : ''}${include_knowledge ? '标记 [知识] 的是 AI 问答沉淀。' : ''}
+要求：中文，直接输出 Markdown，不加"好的我来"开场白。保留原文数字和专有名词。${include_progress ? '标记 [进度] 的来自 Obsidian 同步。' : ''}${include_knowledge ? '标记 [知识] 的是 AI 问答沉淀。' : ''}
 
 ---
 原始记录：
@@ -395,13 +577,41 @@ ${lines}`;
 
   try {
     const summary = await callMinimax(c, {
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: summaryPrompt }],
       temperature: 0.3,
       max_tokens: 1500,
     });
+
+    let suggestion = null;
+    if (generate_suggestion) {
+      const suggestionPrompt = `基于下面对项目的整理摘要，列出 **3-5 条下一步建议**。每条 1-2 句话，含具体动作（如可判断请点出负责人、时间节点或约束）。
+
+规则：
+- 只输出建议列表，无标题无前言
+- 每条以 "- " 开头
+- 中文
+- 不要重复摘要里已有的内容；要提出"下一步该做什么"
+- 区分"必须做"和"可以做"
+
+---
+整理摘要：
+${summary}`;
+
+      try {
+        suggestion = await callMinimax(c, {
+          messages: [{ role: 'user', content: suggestionPrompt }],
+          temperature: 0.5,
+          max_tokens: 800,
+        });
+      } catch (e2) {
+        suggestion = null;   // 建议失败不阻塞
+      }
+    }
+
     return c.json({
       summary: summary || '(空返回)',
-      meta: { days, project, noteCount: results.length, include_progress, include_knowledge },
+      suggestion: suggestion || null,
+      meta: { days, project, noteCount: results.length, include_progress, include_knowledge, tag_filter },
     });
   } catch (e) {
     const msg = e.message || 'LLM 调用异常';
