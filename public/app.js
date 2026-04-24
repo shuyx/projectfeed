@@ -30,7 +30,18 @@ const state = {
   hasMore: false,
   loading: false,
   searchQuery: '',   // v1.11 · 搜索关键词，非空时 loadFeed 走 q 查询
+  activeFilter: '',  // v1.12 · '' | 'todo' | 'progress' | 'idea' | 'milestone' | 'feedback' | 'summary'
 };
+
+// v1.12 · filter chip 定义（UI 6 维，Option 2 映射到后端 WHERE）
+const FILTER_CHIPS = [
+  { key: 'todo',       icon: '🎯', label: '待办' },
+  { key: 'progress',   icon: '✅', label: '进展' },
+  { key: 'idea',       icon: '💡', label: '想法' },
+  { key: 'milestone',  icon: '🏁', label: '里程碑' },
+  { key: 'feedback',   icon: '📥', label: '反馈' },
+  { key: 'summary',    icon: '🤖', label: '总结' },
+];
 
 // ---------- Toast ----------
 let toastTimer = null;
@@ -73,16 +84,19 @@ async function loadFeed(append = false) {
   try {
     const params = new URLSearchParams();
     if (state.currentTab !== 'all') params.set('project', state.currentTab);
-    // v1.11: 搜索激活时扩大 limit（一次拉更多匹配）+ 停止无限滚动分页
+    // v1.11/v1.12: 搜索或筛选激活时扩大 limit + 停止无限滚动分页
     const searching = !!state.searchQuery;
-    params.set('limit', searching ? '100' : '30');
+    const filtering = !!state.activeFilter;
+    const narrowing = searching || filtering;
+    params.set('limit', narrowing ? '100' : '30');
     if (searching) params.set('q', state.searchQuery);
+    if (filtering) params.set('filter', state.activeFilter);
     if (append && state.notes.length > 0) {
       params.set('before', state.notes[state.notes.length - 1].created_at);
     }
     const data = await api('/api/notes?' + params.toString());
     state.notes = append ? [...state.notes, ...(data.notes || [])] : (data.notes || []);
-    state.hasMore = searching ? false : !!data.hasMore;
+    state.hasMore = narrowing ? false : !!data.hasMore;
   } finally {
     state.loading = false;
   }
@@ -306,6 +320,32 @@ function renderEmpty() {
   `;
 }
 
+// v1.12 · filter bar
+function renderFilterBarHtml() {
+  const chips = FILTER_CHIPS.map(c => {
+    const active = state.activeFilter === c.key;
+    const cls = active ? `filter-chip active-${c.key}` : 'filter-chip';
+    return `<button class="${cls}" data-filter="${escapeHtml(c.key)}" type="button" aria-pressed="${active ? 'true' : 'false'}">${c.icon} ${escapeHtml(c.label)}</button>`;
+  }).join('');
+  return `<div class="filter-bar" role="toolbar" aria-label="按标签筛选">${chips}</div>`;
+}
+
+function bindFilterBar(root) {
+  root.querySelectorAll('.filter-chip').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.filter;
+      // 单选：点已激活 → 取消；点未激活 → 切换
+      state.activeFilter = state.activeFilter === key ? '' : key;
+      try {
+        await loadFeed();
+        renderFeed();
+      } catch (e) {
+        toast('筛选失败：' + e.message, true);
+      }
+    });
+  });
+}
+
 function extractTitle(content, max = 40) {
   const first = String(content || '').split('\n').find(l => l.trim()) || '';
   let plain = first.trim();
@@ -502,21 +542,32 @@ function renderFeed() {
   // v1.11: 重建 DOM 前清掉 stale 引用（AI 卡重新从折叠态起步）
   activeAiCard = null;
 
+  const filterBarHtml = renderFilterBarHtml();  // v1.12
+  const emptyHtml = () => {
+    if (state.searchQuery) {
+      return `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`;
+    }
+    if (state.activeFilter) {
+      return `<div class="search-empty"><div class="big">🗂️</div><p>该筛选下暂无内容</p></div>`;
+    }
+    return renderEmpty();
+  };
+
   if (!state.notes.length) {
-    el.innerHTML = state.searchQuery
-      ? `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`
-      : renderEmpty();
+    el.innerHTML = filterBarHtml + emptyHtml();
+    bindFilterBar(el);
     return;
   }
 
   // 分离 profile 卡：pin 在选中项目的 feed 顶部，不参与时间分组
   // "全部" tab 下不显示 profile（太多会堆满，且"项目基础信息"属于单项目视图）
   // v1.11: 搜索激活时也不显示 profile（用户在找特定内容，profile 易命中干扰）
+  // v1.12: filter 激活时也不显示 profile（筛选语义下 profile 不参与筛选，显示会误导）
   const profileNotes = state.notes.filter(n => n.card_type === 'profile');
   const regularNotes = state.notes.filter(n => n.card_type !== 'profile');
 
   let profileHtml = '';
-  if (state.currentTab !== 'all' && !state.searchQuery) {
+  if (state.currentTab !== 'all' && !state.searchQuery && !state.activeFilter) {
     const profile = profileNotes.find(p => p.project_id === state.currentTab);
     if (profile) {
       profileHtml = `<div class="profile-wrap">${renderProfileCard(profile)}</div>`;
@@ -524,9 +575,8 @@ function renderFeed() {
   }
 
   if (!regularNotes.length && !profileHtml) {
-    el.innerHTML = state.searchQuery
-      ? `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`
-      : renderEmpty();
+    el.innerHTML = filterBarHtml + emptyHtml();
+    bindFilterBar(el);
     return;
   }
 
@@ -555,7 +605,7 @@ function renderFeed() {
         }
 
         // Tag badge（主卡手动打的）
-        const tagMap = { todo: { icon: '🎯', label: '待办' }, progress: { icon: '✅', label: '进展' }, idea: { icon: '💡', label: '想法' } };
+        const tagMap = { todo: { icon: '🎯', label: '待办' }, progress: { icon: '✅', label: '进展' }, idea: { icon: '💡', label: '想法' }, milestone: { icon: '🏁', label: '里程碑' } };
         const tagInfo = n.tag ? tagMap[n.tag] : null;
         const tagBadge = tagInfo ? `<span class="tag-badge tag-${n.tag}">${tagInfo.icon} ${tagInfo.label}</span>` : '';
 
@@ -624,10 +674,13 @@ function renderFeed() {
 
   const sentinel = state.hasMore ? '<div id="feed-sentinel" class="feed-sentinel"><span class="spinner"></span> 加载更多…</div>' : '';
 
-  el.innerHTML = profileHtml + groupsHtml + sentinel;
+  el.innerHTML = profileHtml + filterBarHtml + groupsHtml + sentinel;
 
   // v1.10: summary / suggestion 超半屏则折叠（同步测 scrollHeight，paint 前落定）
   collapseLongAiCards(el);
+
+  // v1.12: 绑定 filter-bar 点击
+  bindFilterBar(el);
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {
@@ -1335,6 +1388,7 @@ function pickTag() {
       if (e.key === '1') done('todo');
       else if (e.key === '2') done('progress');
       else if (e.key === '3') done('idea');
+      else if (e.key === '4') done('milestone');
       else if (e.key === 'Escape') done(null);
     };
     document.addEventListener('keydown', keyHandler);

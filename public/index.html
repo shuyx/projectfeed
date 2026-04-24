@@ -49,6 +49,7 @@
 
     <nav class="tabs" id="project-tabs" role="tablist"></nav>
 
+    <!-- v1.12 · 过滤条 filter-bar 由 renderFeed 动态渲染进 #feed 内 (位于 profile 之后、时间流之前) -->
     <main id="feed" class="feed" role="feed"></main>
 
     <footer class="composer">
@@ -85,11 +86,16 @@
           <span class="tag-name">想法</span>
           <span class="tag-desc">灵感 · 疑问 · 待判断的观察</span>
         </button>
+        <button class="tag-btn tag-milestone" data-tag="milestone" type="button">
+          <span class="tag-emoji">🏁</span>
+          <span class="tag-name">里程碑</span>
+          <span class="tag-desc">关键节点 · AI 整理时作为叙事主线</span>
+        </button>
       </div>
       <div class="tag-modal-foot">
         <button id="tag-modal-cancel" class="ghost-btn">取消</button>
       </div>
-      <p class="muted tiny" style="text-align:center;margin-top:10px">按 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> 快速选择</p>
+      <p class="muted tiny" style="text-align:center;margin-top:10px">按 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> 快速选择</p>
     </div>
   </div>
 
@@ -196,6 +202,7 @@
           <label class="radio-row"><input type="radio" name="sum-tag" value="todo"><span>🎯 仅待办</span></label>
           <label class="radio-row"><input type="radio" name="sum-tag" value="progress"><span>✅ 仅进展</span></label>
           <label class="radio-row"><input type="radio" name="sum-tag" value="idea"><span>💡 仅想法</span></label>
+          <label class="radio-row"><input type="radio" name="sum-tag" value="milestone"><span>🏁 仅里程碑</span></label>
         </section>
 
         <section>
