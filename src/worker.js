@@ -14,20 +14,44 @@ function getSyncSecret(env) {
 }
 
 // projectfeed.id → Todoist project id（与 Obsidian _Portfolio/.todoist-config.json 一致）
-const TODOIST_PROJECT_MAP = {
-  'xiangcheng':      '6gQ8gmjjC6Pfx4Wc',
-  'dechuang-robot':  '6gQ8gp2QR2PMChrv',
-  'bci':             '6gQ8gp358vrfprc6',
-  'dechuang-sched':  '6gQ8gp664f6cWFmx',
-  'nantong':         '6gQ8gpH57Wvcr9vM',
-  'kuangchuang':     '6gQhVJWVxHFjF95C',
-  'drone':           '6gQ8gpJwGv8gGfRQ',
-  'embodied-data':   '6gQ8gpQCMQ5Xxq9R',
-  'fmea':            '6gQ8gpXgcgmWr3RX',
-  'emba':            '6gQ8gpf3gFrXfwvV',
-  'ai-cap':          '6gQ8gprw8Jrf2h7Q',
-  'personal':        '6gQ8gpxc7HwpFr3J',
+// v1.17: TODOIST_PROJECT_MAP 从硬编码迁到 D1 projects.todoist_project_id 列
+// 通过 getTodoistProjectId(env, projectId) 查，支持用户动态新增项目
+async function getTodoistProjectId(env, projectId) {
+  const row = await env.DB.prepare('SELECT todoist_project_id FROM projects WHERE id = ?')
+    .bind(projectId).first();
+  return row?.todoist_project_id || null;
+}
+
+// v1.17: 优先级 → Todoist 项目颜色映射
+const TODOIST_COLOR_BY_PRIORITY = {
+  P0: 'red',
+  P1: 'orange',
+  P2: 'blue',
+  continuous: 'grey',
 };
+
+// v1.17: 在 Todoist 创建 project，返回 { ok, project_id, error }
+async function createTodoistProject(env, { name, color }) {
+  if (!env.TODOIST_API_TOKEN) return { ok: false, error: 'TODOIST_API_TOKEN not set' };
+  try {
+    const resp = await fetch('https://api.todoist.com/api/v1/projects', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.TODOIST_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, color: color || 'charcoal' }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      return { ok: false, error: `${resp.status}: ${err.slice(0, 200)}` };
+    }
+    const data = await resp.json();
+    return { ok: true, project_id: data.id };
+  } catch (e) {
+    return { ok: false, error: e.message || 'network error' };
+  }
+}
 
 const VALID_TAGS = ['todo', 'progress', 'idea', 'milestone'];
 
@@ -197,7 +221,8 @@ async function createTodoistTask(env, { content, description, projectId, dueAt }
 }
 
 async function syncTodoForTodoistTag(c, { noteId, projectId, content, dueAt }) {
-  const todoistProjectId = TODOIST_PROJECT_MAP[projectId];
+  // v1.17: 从 D1 查 todoist_project_id（替代硬编码 MAP）
+  const todoistProjectId = await getTodoistProjectId(c.env, projectId);
   if (!todoistProjectId) return { status: 'skipped', reason: 'no_mapping' };
 
   const firstLine = String(content).split('\n').find((l) => l.trim()) || content;
@@ -247,6 +272,61 @@ app.get('/api/config', async (c) => {
     'SELECT * FROM projects ORDER BY sort_order ASC'
   ).all();
   return c.json({ projects: projects.results || [] });
+});
+
+// v1.17 · 新增项目（原子化：先调 Todoist 建 project 成功，再 INSERT 本地）
+// body: { name, emoji, priority, description? }
+app.post('/api/projects', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  const emoji = String(body.emoji || '').trim() || '📁';
+  const priority = body.priority || 'P2';
+  const description = String(body.description || '').trim();
+  if (!name) return c.json({ error: '项目名称必填' }, 400);
+  if (!['P0', 'P1', 'P2', 'continuous'].includes(priority)) {
+    return c.json({ error: 'priority must be P0 | P1 | P2 | continuous' }, 400);
+  }
+
+  // 生成内部 project_id（用户不可见的稳定标识）
+  const projectId = 'proj-' + crypto.randomUUID().slice(0, 8);
+
+  // 排序序号：放到最后（max + 1）
+  const maxRow = await c.env.DB.prepare('SELECT MAX(sort_order) as m FROM projects').first();
+  const sortOrder = (maxRow?.m ?? 0) + 1;
+
+  // 先建 Todoist project（失败直接返回，本地不写）
+  const prioLabel = priority === 'continuous' ? '持续' : priority;
+  const todoistName = `[${prioLabel}] ${emoji} ${name}`;
+  const color = TODOIST_COLOR_BY_PRIORITY[priority] || 'charcoal';
+  const r = await createTodoistProject(c.env, { name: todoistName, color });
+  if (!r.ok) {
+    return c.json({ error: 'Todoist 建项目失败：' + r.error }, 502);
+  }
+
+  // Todoist 成功 → 本地 INSERT
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    'INSERT INTO projects (id, name, emoji, priority, sort_order, created_at, todoist_project_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(projectId, name, emoji, priority, sortOrder, now, r.project_id).run();
+
+  // 可选：如果带了 description，生成一张 profile 卡
+  if (description) {
+    const profileId = crypto.randomUUID();
+    const profileContent = `📋 项目概述：${description}\n\n- 优先级：${prioLabel}\n- 创建于：${now.slice(0, 10)}`;
+    await c.env.DB.prepare(
+      "INSERT INTO notes (id, project_id, content, card_type, created_at) VALUES (?, ?, ?, 'profile', ?)"
+    ).bind(profileId, projectId, profileContent, now).run();
+  }
+
+  return c.json({
+    id: projectId,
+    name,
+    emoji,
+    priority,
+    sort_order: sortOrder,
+    created_at: now,
+    todoist_project_id: r.project_id,
+  });
 });
 
 // 最近 N 天各项目的活跃度（main + progress 卡数）

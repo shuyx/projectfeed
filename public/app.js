@@ -2005,6 +2005,79 @@ function renderMarkdown(md) {
   return html;
 }
 
+// ---------- v1.17 · Add project ----------
+// 注意：和文件顶部 EMOJI_POOL（TeamFeed 留下的动物 emoji）不同，这里是项目类 emoji
+const PROJECT_EMOJI_POOL = [
+  '🔌','🦾','🧠','🚀','🛠','📊','🔬','💡','🧪','🏭',
+  '📐','🔧','🧬','📡','🌐','⚛️','🎯','🎨','🛩','🚢',
+  '🔋','💼','🧭','🏢','📚','📮','🎭','🛰','🗂','📦',
+  '🎬','🎙','🧰','🔭','🪄','💎','🌟','🧩','🏗','⚙️',
+];
+function randomProjectEmoji() {
+  return PROJECT_EMOJI_POOL[Math.floor(Math.random() * PROJECT_EMOJI_POOL.length)];
+}
+
+function setupAddProject() {
+  $('settings-add-project')?.addEventListener('click', openAddProject);
+  $('ap-cancel')?.addEventListener('click', closeAddProject);
+  $('ap-emoji-dice')?.addEventListener('click', () => {
+    $('ap-emoji').value = randomProjectEmoji();
+  });
+  $('ap-submit')?.addEventListener('click', submitAddProject);
+  $('add-project-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeAddProject();
+  });
+}
+
+function openAddProject() {
+  $('ap-name').value = '';
+  $('ap-emoji').value = randomProjectEmoji();
+  $('ap-description').value = '';
+  const p2Radio = document.querySelector('input[name="ap-priority"][value="P2"]');
+  if (p2Radio) p2Radio.checked = true;
+  $('add-project-modal').hidden = false;
+  setTimeout(() => $('ap-name')?.focus(), 50);
+}
+
+function closeAddProject() {
+  $('add-project-modal').hidden = true;
+}
+
+async function submitAddProject() {
+  const name = $('ap-name').value.trim();
+  const emoji = $('ap-emoji').value.trim() || '📁';
+  const priority = document.querySelector('input[name="ap-priority"]:checked')?.value || 'P2';
+  const description = $('ap-description').value.trim();
+  if (!name) {
+    toast('项目名称必填', true);
+    $('ap-name').focus();
+    return;
+  }
+  const btn = $('ap-submit');
+  if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+  try {
+    const proj = await api('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, emoji, priority, description }),
+      timeoutMs: 15000,  // Todoist API 偶尔慢，15s 留余量
+    });
+    // 本地 state 加新项目（免再拉 /api/config）
+    state.projects.push(proj);
+    state.currentTab = proj.id;
+    // 关闭 modal + 刷新 UI
+    closeAddProject();
+    closeSettings();
+    renderTabs();
+    renderSumProjects();
+    await refresh();
+    toast(`已创建 ${emoji} ${name}`);
+  } catch (e) {
+    toast('创建失败：' + e.message, true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '创建'; }
+  }
+}
+
 // ---------- Settings modal ----------
 const DEFAULT_TAB_KEY = 'projectfeed.default-tab';
 
@@ -2151,6 +2224,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSearch();
     setupAiClickOutside();
     setupSwipeTabs();   // v1.16.8
+    setupAddProject(); // v1.17
     $('btn-refresh')?.addEventListener('click', refresh);
   } catch (e) {
     console.error('[setup]', e);

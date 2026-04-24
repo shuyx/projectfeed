@@ -127,6 +127,46 @@
     </div>
   </div>
 
+  <!-- v1.17 · 新增项目表单 modal -->
+  <div id="add-project-modal" class="modal" hidden>
+    <div class="modal-content add-project-content">
+      <h3>➕ 新建项目</h3>
+
+      <label class="field">
+        <span class="field-label">项目名称 <em>*</em></span>
+        <input id="ap-name" type="text" class="field-input" placeholder="如：无人机巡检" maxlength="40" autocomplete="off" />
+      </label>
+
+      <label class="field">
+        <span class="field-label">Emoji</span>
+        <div class="emoji-row">
+          <input id="ap-emoji" type="text" class="field-input emoji-input" maxlength="4" />
+          <button id="ap-emoji-dice" class="ghost-btn" type="button" title="随机换一个">🎲 换一个</button>
+        </div>
+      </label>
+
+      <div class="field">
+        <span class="field-label">优先级</span>
+        <div class="priority-group">
+          <label class="radio-row"><input type="radio" name="ap-priority" value="P0"><span>🔴 P0 · 紧急重要</span></label>
+          <label class="radio-row"><input type="radio" name="ap-priority" value="P1"><span>🟠 P1 · 重要</span></label>
+          <label class="radio-row"><input type="radio" name="ap-priority" value="P2" checked><span>🔵 P2 · 常规</span></label>
+          <label class="radio-row"><input type="radio" name="ap-priority" value="continuous"><span>⚪ 持续 · 长期运营</span></label>
+        </div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">简介（可选）</span>
+        <textarea id="ap-description" class="field-input field-textarea" rows="2" placeholder="一句话说明，会存为项目基础档案 profile 卡" maxlength="200"></textarea>
+      </label>
+
+      <div class="add-project-actions">
+        <button id="ap-cancel" class="ghost-btn">取消</button>
+        <button id="ap-submit" class="primary-btn">创建</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 通用确认 modal -->
   <div id="confirm-modal" class="modal" hidden>
     <div class="modal-content confirm-content">
@@ -148,6 +188,12 @@
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
+
+      <section>
+        <h3>➕ 新增项目</h3>
+        <p class="muted small">本地建项目 + 同步在 Todoist 创建同名 list（原子化）</p>
+        <button id="settings-add-project" class="primary-btn full">新建项目</button>
+      </section>
 
       <section>
         <h3>🎯 默认项目 Tab</h3>
@@ -177,7 +223,7 @@
       <section>
         <h3>ℹ️ 关于 projectfeed</h3>
         <p class="muted tiny" style="line-height:1.9">
-          版本：<code>v1.16.11</code><br>
+          版本：<code>v1.17.0</code><br>
           🌐 <code>feed.ai-robot.fans</code>（原 projectfeed.kevinyuanxin.workers.dev 仍可用）<br>
           📦 <code>github.com/shuyx/projectfeed</code><br>
           💾 D1 <code>projectfeed-db</code> @ APAC<br>
