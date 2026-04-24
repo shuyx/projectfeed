@@ -1,0 +1,18 @@
+name = "projectfeed"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+# MiniMax 国际版 API（Key 通过 wrangler secret put MINIMAX_API_KEY 设置）
+MINIMAX_BASE_URL = "https://api.minimaxi.com/v1/text/chatcompletion_v2"
+MINIMAX_MODEL = "MiniMax-M2.7-highspeed"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "projectfeed-db"
+database_id = "d9120ae1-eba8-4a24-a1ed-16b0bb17a2ed"
+migrations_dir = "migrations"
