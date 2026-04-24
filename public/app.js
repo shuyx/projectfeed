@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.1 · fix renderTabs residue + restore about modal
+// projectfeed app.js — v1.2 · sw network-first for JS/CSS (no more stale cache)
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
