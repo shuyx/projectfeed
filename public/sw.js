@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.7 (per-endpoint timeouts · LLM calls 60s)
+// projectfeed Service Worker · build 2026-04-24 v1.16.8 (swipe left/right to switch project tab)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)

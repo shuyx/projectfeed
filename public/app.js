@@ -534,6 +534,42 @@ function bindCollapsibleToggles(root) {
   });
 }
 
+// v1.16.8 · feed 内左右滑动切换项目 tab（iOS 常见手势）
+function setupSwipeTabs() {
+  const feed = $('feed');
+  if (!feed) return;
+  let startX = 0, startY = 0, startT = 0;
+  let tracking = false;
+  feed.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { tracking = false; return; }
+    const t = e.touches[0];
+    startX = t.clientX;
+    startY = t.clientY;
+    startT = Date.now();
+    tracking = true;
+  }, { passive: true });
+  feed.addEventListener('touchend', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    const dt = Date.now() - startT;
+    if (Math.abs(dx) < 60) return;                        // 距离不够
+    if (Math.abs(dx) < Math.abs(dy) * 1.5) return;        // 主要是纵向 → 滚动
+    if (dt > 700) return;                                 // 太慢（拖动而非 swipe）
+    const tabs = Array.from(document.querySelectorAll('#project-tabs .tab'));
+    if (!tabs.length) return;
+    const currentIdx = tabs.findIndex(b => b.classList.contains('active'));
+    if (currentIdx < 0) return;
+    const nextIdx = dx < 0 ? currentIdx + 1 : currentIdx - 1;  // 左滑下一个，右滑上一个
+    if (nextIdx < 0 || nextIdx >= tabs.length) return;
+    tabs[nextIdx].click();  // 模拟点击走原切 tab 逻辑（state.currentTab 更新 + refresh）
+    // 滚动到顶部（新 tab 从头看）
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, { passive: true });
+}
+
 // v1.11: document 级 click-outside — 点展开 AI 卡外部任意区域 → 折回
 function setupAiClickOutside() {
   document.addEventListener('click', (e) => {
@@ -2108,6 +2144,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupChat();
     setupSearch();
     setupAiClickOutside();
+    setupSwipeTabs();   // v1.16.8
     $('btn-refresh')?.addEventListener('click', refresh);
   } catch (e) {
     console.error('[setup]', e);
