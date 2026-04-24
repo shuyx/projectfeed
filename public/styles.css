@@ -1593,11 +1593,25 @@ input, textarea {
 .tag-badge.tag-todo { background: #fff3cd; color: #8a5a00; }
 .tag-badge.tag-progress { background: #d1f2e1; color: #1b5e20; }
 .tag-badge.tag-idea { background: #d7e8ff; color: #0b3a75; }
+/* v1.12 · 里程碑：金色胶囊 */
+.tag-badge.tag-milestone {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.15);
+}
 
 /* 主卡按 tag 染背景色 */
 .note.tag-bg-todo { background: #fffdf5; border-color: rgba(138,90,0,0.12); }
 .note.tag-bg-progress { background: #f5fbf6; border-color: rgba(27,94,32,0.10); }
 .note.tag-bg-idea { background: #f6f9fd; border-color: rgba(11,58,117,0.10); }
+/* v1.12 · 里程碑主卡：浅金底 + 左侧 3px 金条 + 稍强阴影（视觉最显眼）*/
+.note.tag-bg-milestone {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border-color: rgba(245, 158, 11, 0.25);
+  border-left: 3px solid #f59e0b;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.08), var(--shadow-1);
+}
 
 /* Suggestion card · 橙渐变 + 左边条 */
 .note.is-suggestion {
@@ -1999,3 +2013,48 @@ kbd {
   margin-right: 8px;
 }
 /* 折叠态也保留留白，维持视觉节奏一致 */
+
+/* ============================================================
+   v1.12 · Tag 过滤条（filter-bar · feed 上方横向 chip 列表）
+   ============================================================ */
+.filter-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.filter-bar::-webkit-scrollbar { display: none; }
+.filter-bar:empty { display: none; }
+
+.filter-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-family: var(--font-sys);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.filter-chip:hover { background: var(--surface); }
+.filter-chip:active { transform: scale(0.97); }
+
+/* 激活态：每个 chip 按自己 variant 上色 */
+.filter-chip.active-todo       { background: #fff3cd; color: #8a5a00; border-color: #f5c86a; }
+.filter-chip.active-progress   { background: #d1f2e1; color: #1b5e20; border-color: #7dc999; }
+.filter-chip.active-idea       { background: #d7e8ff; color: #0b3a75; border-color: #90b6e7; }
+.filter-chip.active-milestone  { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; border-color: #f59e0b; box-shadow: 0 0 0 2px rgba(245,158,11,0.15); }
+.filter-chip.active-feedback   { background: #e9e9e4; color: #424242; border-color: #b8b8b0; }
+.filter-chip.active-summary    { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }

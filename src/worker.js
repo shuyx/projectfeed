@@ -29,7 +29,21 @@ const TODOIST_PROJECT_MAP = {
   'personal':        '6gQ8gpxc7HwpFr3J',
 };
 
-const VALID_TAGS = ['todo', 'progress', 'idea'];
+const VALID_TAGS = ['todo', 'progress', 'idea', 'milestone'];
+
+// v1.12 · 过滤器映射（Option 2：UI 5 维 + 里程碑 = 6 种过滤）
+// 前端传 filter=<key>，后端解析为附加 WHERE
+function filterToWhere(filter) {
+  switch (filter) {
+    case 'todo':       return { sql: "tag = 'todo' AND card_type = 'main'", binds: [] };
+    case 'progress':   return { sql: "tag = 'progress' AND card_type = 'main'", binds: [] };
+    case 'idea':       return { sql: "tag = 'idea' AND card_type = 'main'", binds: [] };
+    case 'milestone':  return { sql: "tag = 'milestone' AND card_type = 'main'", binds: [] };
+    case 'feedback':   return { sql: "card_type = 'progress'", binds: [] };  // Obsidian 同步卡
+    case 'summary':    return { sql: "card_type IN ('summary','suggestion')", binds: [] };
+    default: return null;
+  }
+}
 
 async function createTodoistTask(env, { content, description, projectId }) {
   if (!env.TODOIST_API_TOKEN) return { ok: false, error: 'TODOIST_API_TOKEN not set' };
@@ -135,9 +149,10 @@ app.get('/api/notes', async (c) => {
   const project = c.req.query('project');
   const before = c.req.query('before');
   const q = (c.req.query('q') || '').trim();
+  const filter = (c.req.query('filter') || '').trim();  // v1.12
   const limit = Math.min(parseInt(c.req.query('limit') || '30'), 100);
 
-  // v1.11: 动态 WHERE，支持 q（content LIKE）+ project + before 任意组合
+  // v1.11+v1.12: 动态 WHERE，q（content LIKE）+ project + before + filter 任意组合
   const where = ['parent_id IS NULL'];
   const binds = [];
   if (project && project !== 'all') { where.push('project_id = ?'); binds.push(project); }
@@ -146,6 +161,13 @@ app.get('/api/notes', async (c) => {
     const kw = q.replace(/\\/g, '\\\\').replace(/[%_]/g, m => '\\' + m);
     where.push("content LIKE ? ESCAPE '\\'");
     binds.push('%' + kw + '%');
+  }
+  if (filter) {
+    const f = filterToWhere(filter);
+    if (f) {
+      where.push('(' + f.sql + ')');
+      binds.push(...f.binds);
+    }
   }
   if (before) { where.push('created_at < ?'); binds.push(before); }
   const sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT ?`;
@@ -573,7 +595,7 @@ app.post('/api/summarize', async (c) => {
     project = 'all',
     include_progress = true,
     include_knowledge = false,
-    tag_filter = 'all',           // 'all' | 'todo' | 'progress' | 'idea'
+    tag_filter = 'all',           // 'all' | 'todo' | 'progress' | 'idea' | 'milestone'
     generate_suggestion = true,
   } = body;
   const days = timeRange === '30d' ? 30 : timeRange === 'all' ? 3650 : 7;
@@ -601,7 +623,7 @@ app.post('/api/summarize', async (c) => {
     return c.json({ error: '所选范围内没有数据（检查 tag / 项目 / 时间）' }, 400);
   }
 
-  const tagLabel = { todo: '[待办]', progress: '[进展]', idea: '[想法]' };
+  const tagLabel = { todo: '[待办]', progress: '[进展]', idea: '[想法]', milestone: '[🏁里程碑]' };
   const typeLabel = { knowledge: '[知识]', progress: '[进度]', main: '' };
   const lines = results.map(n => {
     const ttag = n.tag ? (tagLabel[n.tag] || '') : '';
@@ -630,13 +652,24 @@ app.post('/api/summarize', async (c) => {
     if (prof) profileContext = String(prof.content).slice(0, 1500);
   }
 
-  const systemPrompt = profileContext
+  // v1.12 · 里程碑软覆盖指令：以最新里程碑为叙事锚点，前面的 progress demote 为上下文
+  const milestoneDirective = `
+
+【里程碑权重规则】
+记录中标记 [🏁里程碑] 的卡片是用户手动确认的关键节点，应作为叙事主线：
+- 以最新里程碑为锚点组织输出
+- 里程碑之前的 [进展]/[进度] 卡 demote 为"通向该里程碑的过程"，不单独详述，一笔带过
+- 保留里程碑未覆盖的关键细节（瓶颈、风险、遗留问题、人物决策）
+- 多个里程碑按时间线叙述（M1 → M2 → M3），强调里程碑之间的推进
+- 如果记录中没有 [🏁里程碑] 卡，按正常时间线整理即可`;
+
+  const systemPrompt = (profileContext
     ? `你是个人项目进展整理助手。以下是该项目（或多个项目）的基础档案，请在整理时作为背景参考，帮助你识别关键人物、里程碑和约束。
 
 ${profileContext}
 
 ---`
-    : '你是个人项目进展整理助手。';
+    : '你是个人项目进展整理助手。') + milestoneDirective;
 
   const summaryPrompt = `以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}${tagTagStr}）。请输出结构化摘要：
 
