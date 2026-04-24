@@ -1,4 +1,4 @@
-// projectfeed Service Worker
+// projectfeed Service Worker · build 2026-04-24 v1.5
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)

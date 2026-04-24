@@ -163,7 +163,7 @@ app.post('/api/notes', async (c) => {
   if (!content || !content.trim()) return c.json({ error: 'content required' }, 400);
 
   let card_type = rawCardType || (parent_id ? 'knowledge' : 'main');
-  if (!['main', 'knowledge', 'summary', 'suggestion'].includes(card_type)) {
+  if (!['main', 'knowledge', 'summary', 'suggestion', 'profile'].includes(card_type)) {
     return c.json({ error: 'invalid card_type' }, 400);
   }
 
@@ -207,6 +207,38 @@ app.post('/api/notes', async (c) => {
     id, project_id, content, card_type, parent_id: parentIdFinal, tag, created_at,
     ...(todoistSync ? { todoist_sync: todoistSync } : {}),
   });
+});
+
+// POST /api/profile/:project_id  — upsert 项目基础档案卡
+// Auth: X-Sync-Secret（与 /api/progress 共用）
+app.post('/api/profile/:project_id', async (c) => {
+  const provided = c.req.header('X-Sync-Secret');
+  if (!provided || provided !== getSyncSecret(c.env)) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
+  const project_id = c.req.param('project_id');
+  const { content } = await c.req.json().catch(() => ({}));
+  if (!content || !content.trim()) return c.json({ error: 'content required' }, 400);
+
+  const proj = await c.env.DB.prepare('SELECT id FROM projects WHERE id = ?').bind(project_id).first();
+  if (!proj) return c.json({ error: 'project_id not found' }, 404);
+
+  const existing = await c.env.DB.prepare(
+    "SELECT id FROM notes WHERE project_id = ? AND card_type = 'profile'"
+  ).bind(project_id).first();
+
+  const now = new Date().toISOString();
+  if (existing) {
+    await c.env.DB.prepare('UPDATE notes SET content = ?, updated_at = ? WHERE id = ?')
+      .bind(content, now, existing.id).run();
+    return c.json({ id: existing.id, project_id, card_type: 'profile', content, updated_at: now, action: 'updated' });
+  } else {
+    const id = crypto.randomUUID();
+    await c.env.DB.prepare(
+      "INSERT INTO notes (id, project_id, content, card_type, created_at) VALUES (?, ?, ?, 'profile', ?)"
+    ).bind(id, project_id, content, now).run();
+    return c.json({ id, project_id, card_type: 'profile', content, created_at: now, action: 'created' });
+  }
 });
 
 // 重试 Todoist 同步（卡片上的 ⚠️ 失败重试按钮调这个）
@@ -563,7 +595,31 @@ app.post('/api/summarize', async (c) => {
   if (include_knowledge) parts.push('知识卡');
   const tagTagStr = tag_filter === 'all' ? '' : ` · 仅 ${tag_filter}`;
 
-  const summaryPrompt = `你是个人项目进展整理助手。以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}${tagTagStr}）。请输出结构化摘要：
+  // 加载 profile 卡作为 system context（按项目 or 全部）
+  let profileContext = '';
+  if (project === 'all') {
+    const { results: profiles } = await c.env.DB.prepare(
+      "SELECT project_id, content FROM notes WHERE card_type = 'profile'"
+    ).all();
+    if (profiles && profiles.length) {
+      profileContext = profiles.map(p => `【${p.project_id}】\n${String(p.content).slice(0, 800)}`).join('\n\n---\n\n');
+    }
+  } else {
+    const prof = await c.env.DB.prepare(
+      "SELECT content FROM notes WHERE project_id = ? AND card_type = 'profile'"
+    ).bind(project).first();
+    if (prof) profileContext = String(prof.content).slice(0, 1500);
+  }
+
+  const systemPrompt = profileContext
+    ? `你是个人项目进展整理助手。以下是该项目（或多个项目）的基础档案，请在整理时作为背景参考，帮助你识别关键人物、里程碑和约束。
+
+${profileContext}
+
+---`
+    : '你是个人项目进展整理助手。';
+
+  const summaryPrompt = `以下是「${project === 'all' ? '全部项目' : project}」近 ${days} 天的记录（来源：${parts.join(' + ')}${tagTagStr}）。请输出结构化摘要：
 
 1. **关键进展**（3-5 条，含具体数字/人物）
 2. **待办和风险**（从未完成事项识别）
@@ -577,7 +633,10 @@ ${lines}`;
 
   try {
     const summary = await callMinimax(c, {
-      messages: [{ role: 'user', content: summaryPrompt }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: summaryPrompt },
+      ],
       temperature: 0.3,
       max_tokens: 1500,
     });

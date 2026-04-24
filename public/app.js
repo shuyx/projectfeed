@@ -1,5 +1,5 @@
 // ============================================================
-// projectfeed app.js — v1.4 · priority dots on tabs + real icon
+// projectfeed app.js — v1.5 · profile card (project baseline · pinned top)
 // ============================================================
 
 // ---------- Emoji pool & hashing ----------
@@ -293,6 +293,22 @@ function extractTitle(content, max = 40) {
   return plain.length > max ? plain.slice(0, max) + '…' : plain;
 }
 
+function renderProfileCard(n) {
+  return `
+    <article class="note is-profile" data-id="${escapeHtml(n.id)}">
+      <div class="note-head">
+        <span class="profile-badge">📌 项目基础档案</span>
+        <button class="edit-btn" aria-label="编辑基础档案" title="编辑">✏️</button>
+      </div>
+      <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
+      <div class="note-foot">
+        <span class="note-time muted tiny">${n.updated_at ? '更新于 ' + formatCardDateTime(n.updated_at) : formatCardDateTime(n.created_at)}</span>
+        <span class="muted tiny">ℹ️ 整理时作为 AI 背景资料</span>
+      </div>
+    </article>
+  `;
+}
+
 function renderKnowledgeCard(k) {
   return `
     <div class="knowledge-card" data-id="${escapeHtml(k.id)}">
@@ -321,7 +337,25 @@ function renderFeed() {
     return;
   }
 
-  const groups = groupNotesByDate(state.notes);
+  // 分离 profile 卡：pin 在选中项目的 feed 顶部，不参与时间分组
+  // "全部" tab 下不显示 profile（太多会堆满，且"项目基础信息"属于单项目视图）
+  const profileNotes = state.notes.filter(n => n.card_type === 'profile');
+  const regularNotes = state.notes.filter(n => n.card_type !== 'profile');
+
+  let profileHtml = '';
+  if (state.currentTab !== 'all') {
+    const profile = profileNotes.find(p => p.project_id === state.currentTab);
+    if (profile) {
+      profileHtml = `<div class="profile-wrap">${renderProfileCard(profile)}</div>`;
+    }
+  }
+
+  if (!regularNotes.length && !profileHtml) {
+    el.innerHTML = renderEmpty();
+    return;
+  }
+
+  const groups = groupNotesByDate(regularNotes);
   const projectMap = Object.fromEntries(state.projects.map(p => [p.id, p]));
   const showProjectBadge = state.currentTab === 'all';
 
@@ -396,7 +430,7 @@ function renderFeed() {
 
   const sentinel = state.hasMore ? '<div id="feed-sentinel" class="feed-sentinel"><span class="spinner"></span> 加载更多…</div>' : '';
 
-  el.innerHTML = groupsHtml + sentinel;
+  el.innerHTML = profileHtml + groupsHtml + sentinel;
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {
