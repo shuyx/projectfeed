@@ -268,6 +268,51 @@ function groupNotesByDate(notes) {
   return groups;
 }
 
+// v1.15: 计算 todo 卡紧急度等级（基于 due_at 与当前时间差）
+function computeUrgency(dueAt) {
+  if (!dueAt) return 'none';
+  const due = new Date(dueAt);
+  if (isNaN(due.getTime())) return 'none';
+  const now = new Date();
+  const diffMs = due.getTime() - now.getTime();
+  const diffDays = diffMs / 86400000;
+  // 已过期：归到 today（最紧迫视觉）
+  if (diffDays < 0) return 'today';
+  // 今天内：到今日 23:59 为止
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+  if (due <= endOfToday) return 'today';
+  const endOfTomorrow = new Date(endOfToday.getTime() + 86400000);
+  if (due <= endOfTomorrow) return 'tomorrow';
+  if (diffDays <= 3) return '3d';
+  if (diffDays <= 7) return '1w';
+  return 'later';
+}
+
+// v1.15: 友好显示 due_at（卡片 foot 用）
+function formatDueAt(dueAt) {
+  if (!dueAt) return '';
+  const due = new Date(dueAt);
+  if (isNaN(due.getTime())) return '';
+  const now = new Date();
+  const ymd = (x) => `${x.getFullYear()}-${x.getMonth() + 1}-${x.getDate()}`;
+  const time = `${String(due.getHours()).padStart(2, '0')}:${String(due.getMinutes()).padStart(2, '0')}`;
+  const todayStr = ymd(now);
+  const tomorrowStr = ymd(new Date(now.getTime() + 86400000));
+  const dueStr = ymd(due);
+  const urgency = computeUrgency(dueAt);
+  const icon = urgency === 'today' ? '⏰' : urgency === 'tomorrow' ? '🔥' : urgency === '3d' ? '⚡' : urgency === '1w' ? '📅' : '🗓';
+  let datePart;
+  if (dueStr === todayStr) datePart = '今天';
+  else if (dueStr === tomorrowStr) datePart = '明天';
+  else {
+    const sameYear = due.getFullYear() === now.getFullYear();
+    datePart = sameYear ? `${due.getMonth() + 1}月${due.getDate()}日` : `${due.getFullYear()}年${due.getMonth() + 1}月${due.getDate()}日`;
+  }
+  // 已过期标记
+  if (due < now) return `${icon} 已过期（${datePart} ${time}）`;
+  return `${icon} ${datePart} ${time}`;
+}
+
 // Core: escape + apply money/unit/percent/date/time/person highlights to raw text
 function highlightPlainText(raw) {
   let html = escapeHtml(raw);
@@ -604,7 +649,10 @@ function renderFeed() {
     return;
   }
 
-  const groups = groupNotesByDate(regularNotes);
+  // v1.15: filter=todo 时扁平排序（按 due_at 由近及远），不做日期分组
+  const groups = state.activeFilter === 'todo'
+    ? [{ label: '⏰ 按截止时间排序', notes: regularNotes }]
+    : groupNotesByDate(regularNotes);
   const projectMap = Object.fromEntries(state.projects.map(p => [p.id, p]));
   const showProjectBadge = state.currentTab === 'all';
 
@@ -675,6 +723,13 @@ function renderFeed() {
         const classes = ['note'];
         if (isMain && n.tag) classes.push(`tag-bg-${n.tag}`);
         if (n.archived) classes.push('is-archived');  // v1.13
+        // v1.15: todo 卡加紧急度 class（未归档才有）
+        let urgencyLabel = '';
+        if (isMain && n.tag === 'todo' && !n.archived) {
+          const u = computeUrgency(n.due_at);
+          classes.push(`due-${u}`);
+          urgencyLabel = formatDueAt(n.due_at);
+        }
 
         // v1.13: tag=todo 未归档 → ✅ 打勾；归档视图 → ↶ 还原
         let archiveBtn = '';
@@ -700,6 +755,7 @@ function renderFeed() {
             <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
             <div class="note-foot">
               <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}${n.archived_at ? ' · 完成于 ' + formatCardDateTime(n.archived_at) : ''}</span>
+              ${urgencyLabel ? `<span class="note-due">${escapeHtml(urgencyLabel)}</span>` : ''}
               ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
             </div>
           </article>

@@ -2104,6 +2104,59 @@ kbd {
 }
 .note.is-archived:hover { opacity: 0.92; }
 
+/* ============================================================
+   v1.15 · Todo 紧急度色阶（覆盖 tag-bg-todo 的默认浅黄）
+   ============================================================ */
+/* 今天内 / 已过期：深红（最紧迫） */
+.note.due-today {
+  background: #fef2f2;
+  border-color: rgba(220, 38, 38, 0.20);
+  border-left: 3px solid #dc2626;
+}
+/* 明天内：橙色 */
+.note.due-tomorrow {
+  background: #fff7ed;
+  border-color: rgba(234, 88, 12, 0.20);
+  border-left: 3px solid #ea580c;
+}
+/* 三天内：金色（提醒） */
+.note.due-3d {
+  background: #fefce8;
+  border-color: rgba(202, 138, 4, 0.20);
+  border-left: 3px solid #ca8a04;
+}
+/* 一周内：蓝色（计划中） */
+.note.due-1w {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.20);
+  border-left: 3px solid #2563eb;
+}
+/* 一周外：灰色（背景级） */
+.note.due-later {
+  background: #f9fafb;
+  border-color: rgba(107, 114, 128, 0.20);
+  border-left: 3px solid #6b7280;
+}
+/* 无截止时间（due-none）保持 tag-bg-todo 的浅黄，不覆盖 */
+
+/* 截止时间标签（foot 里紧跟 note-time） */
+.note-due {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.note.due-today .note-due   { background: #fecaca; color: #991b1b; }
+.note.due-tomorrow .note-due { background: #fed7aa; color: #9a3412; }
+.note.due-3d .note-due      { background: #fde68a; color: #78350f; }
+.note.due-1w .note-due      { background: #bfdbfe; color: #1e40af; }
+.note.due-later .note-due   { background: #e5e7eb; color: #374151; }
+
 /* toast 带 Undo 按钮 */
 .toast-action {
   margin-left: 12px;
