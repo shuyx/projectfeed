@@ -925,6 +925,78 @@ input, textarea {
   width: 16px;
   height: 16px;
 }
+/* ============================================================
+   v1.17 · Add project modal
+   ============================================================ */
+.add-project-content {
+  max-width: 440px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.add-project-content h3 {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+.field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.field-label em {
+  color: #dc2626;
+  font-style: normal;
+  margin-left: 2px;
+}
+.field-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  font-family: var(--font-sys);
+  font-size: 15px;
+  color: var(--ink);
+  background: var(--surface-2);
+  outline: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+}
+.field-input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.field-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.emoji-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.emoji-input {
+  flex: 1;
+  font-size: 20px;
+  text-align: center;
+  max-width: 80px;
+}
+.emoji-row .ghost-btn { flex: 0 0 auto; white-space: nowrap; }
+.priority-group { margin-top: 4px; }
+.priority-group .radio-row { margin-bottom: 4px; }
+.add-project-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+.add-project-actions > button { flex: 1; }
+
 /* v1.16.9 · 选中态整行高亮（每组独立 radio，不同维度可各自高亮） */
 .radio-row:has(input[type=radio]:checked),
 .radio-row:has(input[type=checkbox]:checked) {
