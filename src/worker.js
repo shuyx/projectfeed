@@ -31,7 +31,7 @@ const TODOIST_PROJECT_MAP = {
 
 const VALID_TAGS = ['todo', 'progress', 'idea', 'milestone'];
 
-// v1.12 · 过滤器映射（Option 2：UI 5 维 + 里程碑 = 6 种过滤）
+// v1.12/v1.13 · 过滤器映射（Option 2：UI 7 维）
 // 前端传 filter=<key>，后端解析为附加 WHERE
 function filterToWhere(filter) {
   switch (filter) {
@@ -41,6 +41,7 @@ function filterToWhere(filter) {
     case 'milestone':  return { sql: "tag = 'milestone' AND card_type = 'main'", binds: [] };
     case 'feedback':   return { sql: "card_type = 'progress'", binds: [] };  // Obsidian 同步卡
     case 'summary':    return { sql: "card_type IN ('summary','suggestion')", binds: [] };
+    case 'archived':   return { sql: 'archived = 1', binds: [] };  // v1.13 · 已完成视图
     default: return null;
   }
 }
@@ -152,9 +153,11 @@ app.get('/api/notes', async (c) => {
   const filter = (c.req.query('filter') || '').trim();  // v1.12
   const limit = Math.min(parseInt(c.req.query('limit') || '30'), 100);
 
-  // v1.11+v1.12: 动态 WHERE，q（content LIKE）+ project + before + filter 任意组合
+  // v1.11+v1.12+v1.13: 动态 WHERE，q + project + before + filter + archived 过滤
   const where = ['parent_id IS NULL'];
   const binds = [];
+  // v1.13: 默认排除已归档（filter=archived 时由 filterToWhere 显式加 archived=1，不过滤默认）
+  if (filter !== 'archived') where.push('(archived IS NULL OR archived = 0)');
   if (project && project !== 'all') { where.push('project_id = ?'); binds.push(project); }
   if (q) {
     // LIKE 特殊字符转义：\ → \\，% → \%，_ → \_
@@ -273,6 +276,50 @@ app.post('/api/profile/:project_id', async (c) => {
     ).bind(id, project_id, content, now).run();
     return c.json({ id, project_id, card_type: 'profile', content, created_at: now, action: 'created' });
   }
+});
+
+// v1.13 · 归档待办卡（打勾完成）
+// - 本地 archived=1 + archived_at 必须成功
+// - Todoist close 失败不回滚本地归档（镜像关系）
+app.post('/api/notes/:id/archive', async (c) => {
+  const id = c.req.param('id');
+  const note = await c.env.DB.prepare(
+    'SELECT id, tag, todoist_task_id, archived FROM notes WHERE id = ?'
+  ).bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (note.archived) return c.json({ error: 'already archived' }, 409);
+
+  const archivedAt = new Date().toISOString();
+  await c.env.DB.prepare('UPDATE notes SET archived = 1, archived_at = ? WHERE id = ?')
+    .bind(archivedAt, id).run();
+
+  // Todoist close（仅对已同步的 todo 卡）· 失败仅返回错误 meta，本地归档照常成功
+  let todoistClose = null;
+  if (note.tag === 'todo' && note.todoist_task_id && c.env.TODOIST_API_TOKEN) {
+    try {
+      const resp = await fetch(`https://api.todoist.com/api/v1/tasks/${note.todoist_task_id}/close`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${c.env.TODOIST_API_TOKEN}` },
+      });
+      todoistClose = resp.ok
+        ? { ok: true }
+        : { ok: false, error: `${resp.status}: ${(await resp.text()).slice(0, 160)}` };
+    } catch (e) {
+      todoistClose = { ok: false, error: e.message || 'network error' };
+    }
+  }
+  return c.json({ id, archived: true, archived_at: archivedAt, todoist_close: todoistClose });
+});
+
+// v1.13 · 取消归档（从"已完成"视图点 ↶ 还原）
+// 只还原本地状态；不会在 Todoist 端 reopen（如需可手动去 Todoist 重开）
+app.post('/api/notes/:id/unarchive', async (c) => {
+  const id = c.req.param('id');
+  const note = await c.env.DB.prepare('SELECT id, archived FROM notes WHERE id = ?').bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (!note.archived) return c.json({ error: 'not archived' }, 409);
+  await c.env.DB.prepare('UPDATE notes SET archived = 0, archived_at = NULL WHERE id = ?').bind(id).run();
+  return c.json({ id, archived: false });
 });
 
 // 重试 Todoist 同步（卡片上的 ⚠️ 失败重试按钮调这个）
@@ -609,12 +656,15 @@ app.post('/api/summarize', async (c) => {
 
   const tagCondition = (tag_filter && tag_filter !== 'all') ? ' AND tag = ?' : '';
 
+  // v1.13: summarize 默认排除已归档（已完成的待办不需要再进 AI 总结）
+  const archivedFilter = ' AND (archived IS NULL OR archived = 0)';
+
   let sql, binds;
   if (project === 'all') {
-    sql = `SELECT * FROM notes WHERE created_at >= ? AND card_type IN (${placeholders})${tagCondition} ORDER BY created_at ASC LIMIT 500`;
+    sql = `SELECT * FROM notes WHERE created_at >= ? AND card_type IN (${placeholders})${tagCondition}${archivedFilter} ORDER BY created_at ASC LIMIT 500`;
     binds = tag_filter !== 'all' ? [cutoff, ...allowed, tag_filter] : [cutoff, ...allowed];
   } else {
-    sql = `SELECT * FROM notes WHERE created_at >= ? AND project_id = ? AND card_type IN (${placeholders})${tagCondition} ORDER BY created_at ASC LIMIT 500`;
+    sql = `SELECT * FROM notes WHERE created_at >= ? AND project_id = ? AND card_type IN (${placeholders})${tagCondition}${archivedFilter} ORDER BY created_at ASC LIMIT 500`;
     binds = tag_filter !== 'all' ? [cutoff, project, ...allowed, tag_filter] : [cutoff, project, ...allowed];
   }
   const { results } = await c.env.DB.prepare(sql).bind(...binds).all();
