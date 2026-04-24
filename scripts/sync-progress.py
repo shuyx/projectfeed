@@ -37,7 +37,7 @@ import urllib.request
 import urllib.error
 
 
-API_URL = "https://projectfeed.kevinyuanxin.workers.dev/api/progress"
+API_URL = "https://feed.ai-robot.fans/api/progress"
 SECRETS_FILE = os.path.expanduser("~/.claude/serects api.env")
 VALID_SOURCES = ("feedback", "recap", "capsule", "manual")
 VALID_PROJECT_IDS = (

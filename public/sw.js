@@ -1,4 +1,4 @@
-// projectfeed Service Worker · build 2026-04-24 v1.16.4 (stale-while-revalidate HTML/JS/CSS + 8s API timeout)
+// projectfeed Service Worker · build 2026-04-24 v1.16.5 (custom domain feed.ai-robot.fans)
 // Strategy:
 //   - HTML → network-first (always fresh, fallback to cache if offline)
 //   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
