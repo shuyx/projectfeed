@@ -181,7 +181,7 @@ function parseChineseDatetime(text) {
 function filterToWhere(filter) {
   switch (filter) {
     case 'todo':       return { sql: "tag = 'todo' AND card_type = 'main'", binds: [] };
-    case 'progress':   return { sql: "tag = 'progress' AND card_type = 'main'", binds: [] };
+    case 'progress':   return { sql: "tag IN ('progress','milestone') AND card_type = 'main'", binds: [] };  // 进展包含里程碑
     case 'idea':       return { sql: "tag = 'idea' AND card_type = 'main'", binds: [] };
     case 'milestone':  return { sql: "tag = 'milestone' AND card_type = 'main'", binds: [] };
     case 'feedback':   return { sql: "card_type = 'progress'", binds: [] };  // Obsidian 同步卡
@@ -239,11 +239,11 @@ async function syncTodoForTodoistTag(c, { noteId, projectId, content, dueAt }) {
   return { status: 'failed', error: r.error };
 }
 
-async function callMinimax(c, { messages, system, user, temperature = 0.3, max_tokens = 1200 }) {
-  const apiKey = c.env.MINIMAX_API_KEY;
-  if (!apiKey) throw new Error('LLM 未配置：需要设置 MINIMAX_API_KEY');
-  const baseUrl = c.env.MINIMAX_BASE_URL || 'https://api.minimaxi.com/v1/text/chatcompletion_v2';
-  const model = c.env.MINIMAX_MODEL || 'MiniMax-M2.7-highspeed';
+async function callLLM(c, { messages, system, user, temperature = 0.3, max_tokens = 1200 }) {
+  const apiKey = c.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error('LLM 未配置：需要设置 DEEPSEEK_API_KEY');
+  const baseUrl = c.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions';
+  const model = c.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
   let msgs = messages;
   if (!msgs) {
     msgs = [];
@@ -784,7 +784,7 @@ ${projLine}
 ${text}`;
 
   try {
-    const raw = await callMinimax(c, { system, user, temperature: 0.1, max_tokens: 1500 });
+    const raw = await callLLM(c, { system, user, temperature: 0.1, max_tokens: 1500 });
     let corrected = String(raw || '').trim();
     corrected = corrected.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '');
     corrected = corrected.replace(/^(修正后[:：]|纠正后[:：]|结果[:：])\s*/i, '');
@@ -874,7 +874,7 @@ ${ctxLines.join('\n')}`;
   ];
 
   try {
-    const reply = await callMinimax(c, { messages: llmMessages, temperature: 0.5, max_tokens: 1500 });
+    const reply = await callLLM(c, { messages: llmMessages, temperature: 0.5, max_tokens: 1500 });
     const now = Date.now();
     const fullHistory = [
       ...history,
@@ -923,7 +923,11 @@ app.post('/api/summarize', async (c) => {
   if (include_knowledge) allowed.push('knowledge');
   const placeholders = allowed.map(() => '?').join(',');
 
-  const tagCondition = (tag_filter && tag_filter !== 'all') ? ' AND tag = ?' : '';
+  // 进展 tag 包含里程碑（里程碑是进展的关键子集）
+  const tagFilterTags = tag_filter === 'progress' ? ['progress', 'milestone'] : (tag_filter && tag_filter !== 'all' ? [tag_filter] : []);
+  const tagCondition = tagFilterTags.length > 0
+    ? ` AND tag IN (${tagFilterTags.map(() => '?').join(',')})`
+    : '';
 
   // v1.13: summarize 默认排除已归档（已完成的待办不需要再进 AI 总结）
   const archivedFilter = ' AND (archived IS NULL OR archived = 0)';
@@ -931,10 +935,10 @@ app.post('/api/summarize', async (c) => {
   let sql, binds;
   if (project === 'all') {
     sql = `SELECT * FROM notes WHERE created_at >= ? AND card_type IN (${placeholders})${tagCondition}${archivedFilter} ORDER BY created_at ASC LIMIT 500`;
-    binds = tag_filter !== 'all' ? [cutoff, ...allowed, tag_filter] : [cutoff, ...allowed];
+    binds = tagFilterTags.length > 0 ? [cutoff, ...allowed, ...tagFilterTags] : [cutoff, ...allowed];
   } else {
     sql = `SELECT * FROM notes WHERE created_at >= ? AND project_id = ? AND card_type IN (${placeholders})${tagCondition}${archivedFilter} ORDER BY created_at ASC LIMIT 500`;
-    binds = tag_filter !== 'all' ? [cutoff, project, ...allowed, tag_filter] : [cutoff, project, ...allowed];
+    binds = tagFilterTags.length > 0 ? [cutoff, project, ...allowed, ...tagFilterTags] : [cutoff, project, ...allowed];
   }
   const { results } = await c.env.DB.prepare(sql).bind(...binds).all();
 
@@ -998,7 +1002,7 @@ app.post('/api/summarize', async (c) => {
 ${lines}`;
 
   try {
-    const summary = await callMinimax(c, {
+    const summary = await callLLM(c, {
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: summaryPrompt },
@@ -1014,7 +1018,7 @@ ${lines}`;
 ${summary}`;
 
       try {
-        suggestion = await callMinimax(c, {
+        suggestion = await callLLM(c, {
           messages: [{ role: 'user', content: suggestionPrompt }],
           temperature: 0.5,
           max_tokens: 600,
@@ -1033,6 +1037,28 @@ ${summary}`;
     const msg = e.message || 'LLM 调用异常';
     const isConfig = msg.includes('LLM 未配置');
     return c.json({ error: msg }, isConfig ? 503 : 502);
+  }
+});
+
+// ============================================================
+// Suggest — v1.18: 按需生成建议，基于已有 summary 文本，单次 LLM 调用
+// ============================================================
+
+app.post('/api/suggest', async (c) => {
+  const { summary } = await c.req.json().catch(() => ({}));
+  if (!summary || typeof summary !== 'string' || !summary.trim()) {
+    return c.json({ error: '缺少 summary 文本' }, 400);
+  }
+  const prompt = `基于下方摘要列 3-5 条**下一步建议**。每条包含：具体动作（做什么）+ 可判断时的负责人/时间节点/约束。用"- " 开头，不重复摘要内容，按紧迫度区分"必须做"与"可以做"。不要用表格。\n\n${summary.slice(0, 4000)}`;
+  try {
+    const suggestion = await callLLM(c, {
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+      max_tokens: 600,
+    });
+    return c.json({ suggestion });
+  } catch (e) {
+    return c.json({ error: e.message }, 502);
   }
 });
 
