@@ -36,6 +36,7 @@ const state = {
   timeView: 'list',        // v1.28 · 'list' | 'chart'
   timeChartPeriod: 'week', // v1.28 · 图表周期
   expandedStacks: new Set(), // v1.30 · 已展开的项目堆叠（project_id 集合）
+  stackIndices: {},          // v1.31 · 堆叠翻页索引（stackKey → currentIndex）
 };
 
 // ---------- Feed Cache ----------
@@ -941,14 +942,14 @@ function renderFilterBarHtml() {
     const cls = active ? `filter-chip active-${c.key}` : 'filter-chip';
     return `<button class="${cls}" data-filter="${escapeHtml(c.key)}" type="button" aria-pressed="${active ? 'true' : 'false'}">${c.icon} ${escapeHtml(c.label)}</button>`;
   }).join('');
-  let viewBtn = '';
-  if (state.currentTab === 'all') {
-    const isProject = state.viewMode === 'project';
-    // 图标显示"点击后切换到的视图"，直观告知当前能做什么
-    const icon = isProject ? '📅' : '🗂';
-    const title = isProject ? '切换到时间视图' : '切换到项目分组视图';
-    viewBtn = `<button class="view-mode-btn${isProject ? '' : ' is-active'}" data-action="toggle-view" type="button" title="${title}">${icon}</button><span class="view-mode-sep"></span>`;
-  }
+  // v1.31: 视图切换按钮在所有 tab 显示
+  const isProject = state.viewMode === 'project';
+  const icon = isProject ? '📅' : '🗂';
+  const inAllTab = state.currentTab === 'all';
+  const title = isProject
+    ? '切换到时间视图'
+    : (inAllTab ? '切换到项目分组视图' : '切换到标签分组视图');
+  const viewBtn = `<button class="view-mode-btn${isProject ? '' : ' is-active'}" data-action="toggle-view" type="button" title="${title}">${icon}</button><span class="view-mode-sep"></span>`;
   return `<div class="filter-bar" role="toolbar" aria-label="按标签筛选">${viewBtn}${chips}</div>`;
 }
 
@@ -1072,6 +1073,8 @@ function setupSwipeTabs() {
     if (e.touches.length !== 1) { tracking = false; return; }
     // filter-bar 内的滑动只做横向滚动，不触发 tab 切换
     if (e.target.closest('.filter-bar')) { tracking = false; return; }
+    // v1.31.2: 堆叠卡片区域的左右滑动专用于翻卡，不切 tab
+    if (e.target.closest('.card-stack-swipe')) { tracking = false; return; }
     const t = e.touches[0];
     startX = t.clientX;
     startY = t.clientY;
@@ -1098,6 +1101,105 @@ function setupSwipeTabs() {
     // 滚动到顶部（新 tab 从头看）
     window.scrollTo({ top: 0, behavior: 'auto' });
   }, { passive: true });
+}
+
+// v1.31: 堆叠内上下滑动翻页（iOS 风格）
+function setupStackSwipe() {
+  document.querySelectorAll('.card-stack-swipe').forEach(wrap => {
+    const stackKey = wrap.dataset.stackKey;
+    const total = parseInt(wrap.dataset.total, 10);
+    if (total <= 1) return;
+
+    let startY = 0, startX = 0, startT = 0;
+
+    wrap.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      if (e.target.closest('button, .more-actions, input, textarea')) return;
+      startY = e.touches[0].clientY;
+      startX = e.touches[0].clientX;
+      startT = Date.now();
+    }, { passive: true });
+
+    wrap.addEventListener('touchend', e => {
+      const dy = e.changedTouches[0].clientY - startY;
+      const dx = e.changedTouches[0].clientX - startX;
+      const dt = Date.now() - startT;
+      // v1.31.2: 水平 flick — 左划下一张，右划上一张；垂直手势让页面滚
+      if (dt > 350) return;                                // 时间长 → 让页面滚
+      if (Math.abs(dx) < 30) return;                       // 距离太短 → 忽略
+      if (Math.abs(dx) > 250) return;                      // 距离太长 → 可能是误触
+      if (Math.abs(dx) < Math.abs(dy) * 1.5) return;       // 主要不是水平
+      const velocity = Math.abs(dx) / dt;
+      if (velocity < 0.3) return;                          // 速度不够
+
+      const currentIdx = state.stackIndices[stackKey] || 0;
+      const nextIdx = dx < 0 ? currentIdx + 1 : currentIdx - 1;  // 左划 → 下一张
+      if (nextIdx < 0 || nextIdx >= total) return;
+      animateStackFlip(wrap, currentIdx, nextIdx, dx < 0, stackKey);
+    }, { passive: true });
+  });
+}
+
+function animateStackFlip(wrap, fromIdx, toIdx, isLeft, stackKey) {
+  const slides = wrap.querySelectorAll('.card-stack-slide');
+  const from = slides[fromIdx];
+  const to = slides[toIdx];
+  if (!from || !to || wrap.dataset.animating) return;
+  wrap.dataset.animating = '1';
+
+  // v1.31.1: 锁定当前高度 + 测量目标高度 + 平滑过渡
+  const fromH = wrap.offsetHeight;
+  wrap.style.height = fromH + 'px';
+
+  // 临时显示 to 测量真实高度（视觉不可见）
+  to.style.display = 'block';
+  to.style.position = 'absolute';
+  to.style.visibility = 'hidden';
+  to.style.top = '0';
+  to.style.left = '0';
+  to.style.right = '0';
+  const toH = to.offsetHeight;
+  to.style.visibility = '';
+
+  // v1.31.2: 改为水平位移 — 左划：from 向左滑出 / to 从右进入；右划反之
+  to.style.zIndex = '4';
+  to.style.transform = `translateX(${isLeft ? '60px' : '-60px'})`;
+  to.style.opacity = '0';
+  to.style.transition = 'none';
+
+  from.style.transition = 'none';
+  from.style.position = 'relative';
+  from.style.zIndex = '3';
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const dur = '0.28s';
+      const ease = 'cubic-bezier(0.32, 0.72, 0, 1)';
+      // wrap 高度过渡（消除高度差跳动）
+      wrap.style.transition = `height ${dur} ${ease}`;
+      wrap.style.height = toH + 'px';
+      // to 从右/左侧滑入
+      to.style.transition = `transform ${dur} ${ease}, opacity ${dur} ease-out`;
+      to.style.transform = 'translateX(0)';
+      to.style.opacity = '1';
+      // from 向左/右侧滑出
+      from.style.transition = `transform ${dur} ${ease}, opacity ${dur} ease-out`;
+      from.style.transform = `translateX(${isLeft ? '-50px' : '50px'})`;
+      from.style.opacity = '0';
+    });
+  });
+
+  setTimeout(() => {
+    from.classList.remove('stack-active');
+    from.style.cssText = '';
+    to.classList.remove('stack-animating');
+    to.classList.add('stack-active');
+    to.style.cssText = '';
+    wrap.style.cssText = '';
+    delete wrap.dataset.animating;
+    state.stackIndices[stackKey] = toIdx;
+    // v1.31.1: 不再更新数字 counter（已删除）
+  }, 300);
 }
 
 // v1.11: document 级 click-outside — 点展开 AI 卡外部任意区域 → 折回
@@ -1634,8 +1736,70 @@ function renderFeed() {
 
   // v1.27: 项目分组视图（全部 tab + 非搜索），适用于所有卡片类型
   const projectViewActive = state.currentTab === 'all' && state.viewMode === 'project' && !state.searchQuery;
+  // v1.31: 专项目 tab + 分组视图 → 按 tag 分组（同样支持堆叠）
+  const tagViewActive = state.currentTab !== 'all' && state.viewMode === 'project' && !state.searchQuery;
   let groups;
-  if (projectViewActive) {
+  if (tagViewActive) {
+    // 按 tag 分组 main 卡（其他 card_type 走"其他"组）
+    const TAG_ORDER = ['todo', 'milestone', 'progress', 'idea'];
+    const TAG_INFO = {
+      todo:      { emoji: '🎯', label: '待办' },
+      milestone: { emoji: '🏁', label: '里程碑' },
+      progress:  { emoji: '✅', label: '进展' },
+      idea:      { emoji: '💡', label: '想法' },
+    };
+    const byTag = {};
+    for (const n of regularNotes) {
+      const isMain = n.card_type === 'main' || !n.card_type;
+      const key = isMain ? (n.tag || 'progress') : (n.card_type || 'other');
+      (byTag[key] ||= []).push(n);
+    }
+    // 排序
+    for (const key of Object.keys(byTag)) {
+      byTag[key].sort((a, b) => {
+        if (key === 'todo') {
+          const aD = a.due_at ? new Date(a.due_at) : new Date('9999');
+          const bD = b.due_at ? new Date(b.due_at) : new Date('9999');
+          return aD - bD;
+        }
+        return new Date(b.created_at) - new Date(a.created_at);
+      });
+    }
+
+    groups = [];
+    const orderedKeys = [...TAG_ORDER, ...Object.keys(byTag).filter(k => !TAG_ORDER.includes(k))];
+    for (const tagKey of orderedKeys) {
+      const ns = byTag[tagKey];
+      if (!ns || !ns.length) continue;
+
+      const stackKey  = `${state.currentTab}::${tagKey}`;
+      const ti        = TAG_INFO[tagKey] || { emoji: '📁', label: tagKey };
+      const isStack   = ns.length > 1;
+      const isExpanded = state.expandedStacks.has(stackKey);
+      const isSwipeMode = isStack && !isExpanded;
+      const stackIdx    = isSwipeMode ? Math.min(state.stackIndices[stackKey] || 0, ns.length - 1) : -1;
+      const hiddenCount  = isSwipeMode ? ns.length - 1 : 0;
+      const expandBtn = isSwipeMode
+        ? `<button class="stack-header-btn expand" data-stack-key="${escapeHtml(stackKey)}">${stackIdx + 1}/${ns.length} ▼</button>`
+        : '';
+      const collapseBtn = isStack && isExpanded
+        ? `<button class="stack-header-btn collapse" data-stack-key="${escapeHtml(stackKey)}">▲ 收起</button>`
+        : '';
+      groups.push({
+        cls: 'project-section',
+        projId: stackKey,
+        isStack, isExpanded, hiddenCount,
+        stackIdx, stackKey,
+        headerHtml: `<header class="project-section-head">
+          <span class="proj-emoji">${ti.emoji}</span>
+          <span class="proj-name">${escapeHtml(ti.label)}</span>
+          <span class="proj-count">${ns.length}</span>
+          ${expandBtn}${collapseBtn}
+        </header>`,
+        notes: ns,
+      });
+    }
+  } else if (projectViewActive) {
     const byProject = {};
     for (const n of regularNotes) (byProject[n.project_id] ||= []).push(n);
     const projectGroups = Object.entries(byProject).map(([pid, ns]) => {
@@ -1679,12 +1843,13 @@ function renderFeed() {
         const stackKey = `${pid}::${sg.key}`;
         const isStack    = stackMode && sg.notes.length > 1;
         const isExpanded = state.expandedStacks.has(stackKey);
-        const visibleNotes = (isStack && !isExpanded) ? [sg.notes[0]] : sg.notes;
-        const hiddenCount  = (isStack && !isExpanded) ? sg.notes.length - 1 : 0;
+        const isSwipeMode = isStack && !isExpanded;
+        const stackIdx    = isSwipeMode ? Math.min(state.stackIndices[stackKey] || 0, sg.notes.length - 1) : -1;
+        const hiddenCount  = isSwipeMode ? sg.notes.length - 1 : 0;
 
         let headerHtml;
-        const expandBtnHtml = isStack && !isExpanded
-          ? `<button class="stack-header-btn expand" data-stack-key="${escapeHtml(stackKey)}">▼ ${hiddenCount} 项隐藏</button>`
+        const expandBtnHtml = isSwipeMode
+          ? `<button class="stack-header-btn expand" data-stack-key="${escapeHtml(stackKey)}">▼ 展开</button>`
           : '';
         const collapseBtnHtml = isStack && isExpanded
           ? `<button class="stack-header-btn collapse" data-stack-key="${escapeHtml(stackKey)}">▲ 收起</button>`
@@ -1709,8 +1874,9 @@ function renderFeed() {
           cls: 'project-section',
           projId: stackKey,
           isStack, isExpanded, hiddenCount,
+          stackIdx, stackKey,
           headerHtml,
-          notes: visibleNotes,
+          notes: sg.notes,
         });
       });
     }
@@ -1721,16 +1887,16 @@ function renderFeed() {
   }
 
   const groupsHtml = groups.map(g => {
-    const isStackCollapsed = g.isStack && !g.isExpanded;
-    // v1.30.2: peek 仅渲染纯视觉层叠效果，触发改用 header 按钮
+    const isSwipeMode = g.stackIdx >= 0;
     const peekHtml = g.hiddenCount > 0 ? `
       <div class="card-stack-peek card-stack-peek-1"></div>
       ${g.hiddenCount > 1 ? '<div class="card-stack-peek card-stack-peek-2"></div>' : ''}` : '';
+    // v1.31.1: 删除底部数字 indicator（视觉 peek 已表达"有更多"）
 
     return `
     <div class="${g.cls || 'date-group'}">
       ${g.headerHtml || `<div class="date-divider">${escapeHtml(g.label)}</div>`}
-      <div class="${isStackCollapsed ? 'card-stack-wrap' : ''}">
+      <div class="${isSwipeMode ? 'card-stack-wrap card-stack-swipe' : ''}"${isSwipeMode ? ` data-stack-key="${escapeHtml(g.stackKey)}" data-total="${g.notes.length}"` : ''}>
       ${g.notes.map((n, _ni) => {
         const proj = projectMap[n.project_id];
         const projLabel = proj ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}` : escapeHtml(n.project_id);
@@ -1857,7 +2023,7 @@ function renderFeed() {
           </article>
           ${knowledgeHtml}
         `;
-      }).join('')}
+      }).map((html, idx) => isSwipeMode ? `<div class="card-stack-slide${idx === g.stackIdx ? ' stack-active' : ''}" data-stack-idx="${idx}">${html}</div>` : html).join('')}
       ${peekHtml}
       </div>
     </div>
@@ -1886,6 +2052,9 @@ function renderFeed() {
       renderFeed();
     });
   });
+
+  // v1.31: 堆叠翻页手势
+  setupStackSwipe();
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {

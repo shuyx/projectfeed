@@ -3303,6 +3303,29 @@ kbd {
 }
 .stack-header-btn.expand:hover { opacity: 0.88; background: var(--accent); color: #fff; }
 
+/* ============================================================
+   v1.31 · 堆叠翻页（swipe mode）
+   ============================================================ */
+.card-stack-swipe {
+  position: relative;
+  overflow: hidden;
+  /* 允许垂直拖拽给页面，flick 才被 JS 拦截 */
+  touch-action: pan-y;
+}
+.card-stack-slide {
+  display: none;
+}
+.card-stack-slide.stack-active {
+  display: block;
+  position: relative;
+  z-index: 3;
+}
+.card-stack-slide.stack-active > article.note:first-child {
+  box-shadow:
+    0 8px 22px rgba(0,0,0,0.10),
+    0 3px 8px rgba(0,0,0,0.06);
+}
+
 /* 子分组 header（同项目内多个 stack 时显示） */
 .project-section-head.sub-section-head {
   margin-top: 6px;
