@@ -660,6 +660,36 @@ app.post('/api/notes/:id/reschedule', async (c) => {
   return c.json({ id, due_at, updated_at });
 });
 
+// v1.29 · 时间块安排：更新 due_at + duration_minutes，同步 Todoist due_datetime + duration
+app.post('/api/notes/:id/schedule', async (c) => {
+  const id = c.req.param('id');
+  const { due_at, duration_minutes } = await c.req.json().catch(() => ({}));
+  if (!due_at) return c.json({ error: 'due_at required' }, 400);
+  const note = await c.env.DB.prepare(
+    'SELECT id, todoist_task_id FROM notes WHERE id = ?'
+  ).bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  const dur = Math.max(0, Number(duration_minutes) || 0);
+  const updated_at = new Date().toISOString();
+  await c.env.DB.prepare(
+    'UPDATE notes SET due_at = ?, duration_minutes = ?, status = ?, updated_at = ? WHERE id = ?'
+  ).bind(due_at, dur, 'todo', updated_at, id).run();
+  let todoist = null;
+  if (note.todoist_task_id && c.env.TODOIST_API_TOKEN) {
+    try {
+      const body = { due_datetime: due_at };
+      if (dur > 0) { body.duration = dur; body.duration_unit = 'minute'; }
+      const r = await fetch(`https://api.todoist.com/api/v1/tasks/${note.todoist_task_id}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${c.env.TODOIST_API_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      todoist = r.ok ? { ok: true } : { ok: false, status: r.status };
+    } catch (e) { todoist = { ok: false, error: e.message }; }
+  }
+  return c.json({ id, due_at, duration_minutes: dur, updated_at, todoist });
+});
+
 // v1.28 · 图表用时数据（按日期 × 项目聚合，UTC+8）
 app.get('/api/stats/time-chart', async (c) => {
   const period  = c.req.query('period')  || 'week'; // today|week|month|3month|year

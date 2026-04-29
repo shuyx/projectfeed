@@ -4,7 +4,7 @@
 //   - Icons / manifest → cache-first (rarely change, save bandwidth)
 //   - API → network-only (no cache)
 
-const CACHE_VERSION = 'projectfeed-v29'; // bump for v1.28.2 chart full redesign
+const CACHE_VERSION = 'projectfeed-v31'; // bump for v1.29.1 duration min 15m
 const STATIC_ASSETS = [
   '/',
   '/app.js',

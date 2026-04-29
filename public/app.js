@@ -194,6 +194,14 @@ async function toggleNoteStatus(noteId) {
   return api(`/api/notes/${noteId}/toggle-status`, { method: 'POST' });
 }
 
+// v1.29
+async function scheduleNote(noteId, dueAt, durationMinutes) {
+  return api(`/api/notes/${noteId}/schedule`, {
+    method: 'POST',
+    body: JSON.stringify({ due_at: dueAt, duration_minutes: durationMinutes }),
+  });
+}
+
 // v1.16
 async function moveNote(noteId, targetProjectId) {
   return api(`/api/notes/${noteId}/move`, {
@@ -1199,6 +1207,294 @@ function renderKnowledgeCard(k) {
   `;
 }
 
+// ============================================================
+// v1.29 · 时间块安排 Popup（棘轮感滚鼓 + 三步流程）
+// ============================================================
+
+const _SCHED_SLOT_H   = 44;       // px per 5-min slot
+const _SCHED_MIN_START = 6 * 60;  // 06:00
+const _SCHED_MIN_END   = 23 * 60 + 55; // 23:55
+const _SCHED_DUR_STEPS = [15, 30, 45, 60, 75, 90, 105, 120, 150, 180]; // minutes，15min 起步
+const _SCHED_DAYS = [
+  { key: 'today-am',  label: '今天上午', defH: 8,  defM: 0 },
+  { key: 'today-pm',  label: '今天下午', defH: 14, defM: 0 },
+  { key: 'today-eve', label: '今天晚上', defH: 19, defM: 0 },
+  { key: 'tomorrow',  label: '明天',     defH: 9,  defM: 0 },
+  { key: 'thisweek',  label: '本周五',   defH: 9,  defM: 0 },
+  { key: 'nextweek',  label: '下周一',   defH: 9,  defM: 0 },
+];
+
+let _schedPopupEl = null;
+
+function _minToStr(m) {
+  return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+}
+function _durLabel(min) {
+  const h = Math.floor(min/60), m = min%60;
+  return h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+function _schedDate(dayKey, h, m) {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);
+  if (dayKey === 'tomorrow') {
+    d.setDate(d.getDate() + 1);
+  } else if (dayKey === 'thisweek') {
+    const toFri = (5 - now.getDay() + 7) % 7 || 7;
+    d.setDate(d.getDate() + toFri);
+  } else if (dayKey === 'nextweek') {
+    const toMon = (1 - now.getDay() + 7) % 7 || 7;
+    d.setDate(d.getDate() + toMon);
+  }
+  return d;
+}
+
+function dismissSchedulerPopup() {
+  if (!_schedPopupEl) return;
+  const sheet = _schedPopupEl.querySelector('.sched-sheet');
+  if (sheet) sheet.style.transform = 'translateY(100%)';
+  _schedPopupEl.style.opacity = '0';
+  setTimeout(() => { _schedPopupEl?.remove(); _schedPopupEl = null; }, 280);
+}
+
+function showSchedulerPopup(noteId, note) {
+  dismissSchedulerPopup();
+
+  let selMins  = 9 * 60;  // default 09:00
+  let durIdx   = 1;       // default 45m
+  let selDay   = 'today-am';
+  let drumScroll = null;
+  let snapTimer  = null;
+  let lastCenterIdx = -1;
+
+  // ── Build DOM ──────────────────────────────────────────
+  const overlay = document.createElement('div');
+  overlay.className = 'sched-overlay';
+  overlay.innerHTML = `
+    <div class="sched-sheet">
+      <div class="sched-handle"></div>
+      <div class="sched-title">⏰ 安排时间块</div>
+      <div class="sched-day-row">
+        ${_SCHED_DAYS.map(d =>
+          `<button class="sched-day-btn${d.key === selDay ? ' active' : ''}" data-day="${d.key}">${d.label}</button>`
+        ).join('')}
+      </div>
+      <div class="sched-body">
+        <!-- 左：信息展示 -->
+        <div class="sched-left">
+          <div class="sched-info-block">
+            <span class="sched-lbl">开始时间</span>
+            <span class="sched-time-big" id="sched-start">09:00</span>
+          </div>
+          <div class="sched-sep"></div>
+          <div class="sched-info-block">
+            <span class="sched-lbl">时长</span>
+            <div class="sched-dur-row">
+              <button class="sched-dur-btn" id="sched-dur-minus">−</button>
+              <span class="sched-dur-val" id="sched-dur-val">45m</span>
+              <button class="sched-dur-btn" id="sched-dur-plus">+</button>
+            </div>
+          </div>
+          <div class="sched-sep"></div>
+          <div class="sched-info-block">
+            <span class="sched-lbl">结束时间</span>
+            <span class="sched-time-end" id="sched-end">09:45</span>
+          </div>
+        </div>
+        <!-- 右：棘轮鼓 + 确认 -->
+        <div class="sched-right">
+          <div class="sched-drum" id="sched-drum">
+            <div class="drum-scroll" id="drum-scroll">
+              <div class="drum-inner" id="drum-inner"></div>
+            </div>
+          </div>
+          <button class="sched-confirm-btn" id="sched-confirm">✓ 确认安排</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  _schedPopupEl = overlay;
+
+  // ── Animate in（双 tick 确保初始状态已渲染）──────────────
+  setTimeout(() => {
+    overlay.classList.add('visible');
+    overlay.querySelector('.sched-sheet').style.transform = 'translateY(0)';
+  }, 16);
+
+  // ── Populate drum slots ──────────────────────────────────
+  const drumInner = overlay.querySelector('#drum-inner');
+  for (let m = _SCHED_MIN_START; m <= _SCHED_MIN_END; m += 5) {
+    const div = document.createElement('div');
+    div.className = 'drum-slot';
+    div.dataset.mins = m;
+    div.textContent = _minToStr(m);
+    drumInner.appendChild(div);
+  }
+  drumScroll = overlay.querySelector('#drum-scroll');
+
+  // ── Helpers ──────────────────────────────────────────────
+  const slotCount = (selMins - _SCHED_MIN_START) / 5;
+
+  const updateDisplay = () => {
+    const dur = _SCHED_DUR_STEPS[durIdx];
+    const endMins = Math.min(23 * 60 + 59, selMins + dur);
+    overlay.querySelector('#sched-start').textContent = _minToStr(selMins);
+    overlay.querySelector('#sched-end').textContent   = _minToStr(endMins);
+    overlay.querySelector('#sched-dur-val').textContent = _durLabel(dur);
+  };
+
+  const scrollDrumTo = (mins, animate) => {
+    const idx = Math.round((mins - _SCHED_MIN_START) / 5);
+    drumScroll.scrollTo({ top: idx * _SCHED_SLOT_H, behavior: animate ? 'smooth' : 'instant' });
+  };
+
+  const updateSlotClasses = () => {
+    const idx = Math.round(drumScroll.scrollTop / _SCHED_SLOT_H);
+    if (idx === lastCenterIdx) return;
+    const slots = drumInner.children;
+    if (lastCenterIdx >= 0) {
+      for (let d = -2; d <= 2; d++) {
+        const el = slots[lastCenterIdx + d];
+        if (el) el.className = 'drum-slot';
+      }
+    }
+    for (let d = -2; d <= 2; d++) {
+      const el = slots[idx + d];
+      if (!el) continue;
+      if (d === 0) el.className = 'drum-slot is-center';
+      else if (Math.abs(d) === 1) el.className = 'drum-slot is-near-1';
+      else el.className = 'drum-slot is-near-2';
+    }
+    lastCenterIdx = idx;
+    selMins = Math.min(_SCHED_MIN_END, Math.max(_SCHED_MIN_START, _SCHED_MIN_START + idx * 5));
+    updateDisplay();
+  };
+
+  // ── Scroll events ─────────────────────────────────────────
+  drumScroll.addEventListener('scroll', () => {
+    updateSlotClasses();
+    // Snap timer: after scroll settles, align to nearest slot
+    clearTimeout(snapTimer);
+    snapTimer = setTimeout(() => {
+      const idx = Math.round(drumScroll.scrollTop / _SCHED_SLOT_H);
+      const target = _SCHED_MIN_START + idx * 5;
+      if (target !== selMins) scrollDrumTo(target, true);
+    }, 120);
+  }, { passive: true });
+
+  // Velocity-based jump (touch)
+  let _ts = 0, _ty = 0, _lastTy = 0, _lastTs = 0;
+  drumScroll.addEventListener('touchstart', e => {
+    _ts = Date.now(); _ty = e.touches[0].clientY;
+    _lastTy = _ty; _lastTs = _ts;
+    clearTimeout(snapTimer);
+  }, { passive: true });
+  drumScroll.addEventListener('touchmove', e => {
+    _lastTy = e.touches[0].clientY; _lastTs = Date.now();
+  }, { passive: true });
+  drumScroll.addEventListener('touchend', () => {
+    const dt = Math.max(1, Date.now() - _lastTs);
+    const vel = Math.abs((_ty - _lastTy) / dt) * 1000; // px/s
+    if (vel < 80) return; // let CSS snap handle it
+    const cur = Math.round(drumScroll.scrollTop / _SCHED_SLOT_H);
+    const curMins = _SCHED_MIN_START + cur * 5;
+    let snap = vel > 300 ? 30 : 15;
+    const dir = _ty > _lastTy ? -1 : 1; // scroll direction
+    const extra = Math.ceil(vel / 400) * snap;
+    const targetMins = Math.round((curMins + dir * extra) / snap) * snap;
+    const clamped = Math.min(_SCHED_MIN_END, Math.max(_SCHED_MIN_START, targetMins));
+    setTimeout(() => {
+      scrollDrumTo(clamped, true);
+      if (navigator.vibrate) navigator.vibrate(6);
+    }, 30);
+  }, { passive: true });
+
+  // ── Day chip events ───────────────────────────────────────
+  overlay.querySelectorAll('.sched-day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      overlay.querySelectorAll('.sched-day-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selDay = btn.dataset.day;
+      const preset = _SCHED_DAYS.find(d => d.key === selDay);
+      if (preset) {
+        selMins = preset.defH * 60 + preset.defM;
+        scrollDrumTo(selMins, true);
+        if (navigator.vibrate) navigator.vibrate(4);
+      }
+    });
+  });
+
+  // ── Duration controls ─────────────────────────────────────
+  overlay.querySelector('#sched-dur-minus').addEventListener('click', () => {
+    durIdx = Math.max(0, durIdx - 1);
+    updateDisplay();
+    if (navigator.vibrate) navigator.vibrate(4);
+  });
+  overlay.querySelector('#sched-dur-plus').addEventListener('click', () => {
+    durIdx = Math.min(_SCHED_DUR_STEPS.length - 1, durIdx + 1);
+    updateDisplay();
+    if (navigator.vibrate) navigator.vibrate(4);
+  });
+
+  // ── Swipe-down to dismiss ─────────────────────────────────
+  let sheetDragStartY = 0;
+  const sheet = overlay.querySelector('.sched-sheet');
+  overlay.querySelector('.sched-handle').addEventListener('touchstart', e => {
+    sheetDragStartY = e.touches[0].clientY;
+  }, { passive: true });
+  overlay.querySelector('.sched-handle').addEventListener('touchend', e => {
+    const dy = e.changedTouches[0].clientY - sheetDragStartY;
+    if (dy > 60) dismissSchedulerPopup();
+  }, { passive: true });
+
+  // ── Dismiss on overlay click ──────────────────────────────
+  overlay.addEventListener('click', e => { if (e.target === overlay) dismissSchedulerPopup(); });
+  document.addEventListener('keydown', function _esc(e) {
+    if (e.key === 'Escape') { dismissSchedulerPopup(); document.removeEventListener('keydown', _esc); }
+  });
+
+  // ── Confirm ───────────────────────────────────────────────
+  overlay.querySelector('#sched-confirm').addEventListener('click', async () => {
+    const preset = _SCHED_DAYS.find(d => d.key === selDay);
+    const baseDate = _schedDate(selDay, Math.floor(selMins / 60), selMins % 60);
+    const isoStr = _toCSTIso(baseDate);
+    const dur = _SCHED_DUR_STEPS[durIdx];
+    dismissSchedulerPopup();
+    try {
+      await scheduleNote(noteId, isoStr, dur);
+      const n = state.notes.find(x => x.id === noteId);
+      if (n) { n.due_at = isoStr; n.duration_minutes = dur; n.status = 'todo'; n.updated_at = new Date().toISOString(); }
+      invalidateFeedCache();
+      renderFeed();
+      toast(`已安排：${preset?.label || ''} ${_minToStr(selMins)} · ${_durLabel(dur)}`);
+    } catch (err) {
+      toast('安排失败：' + err.message, true);
+    }
+  });
+
+  // ── Initial position ──────────────────────────────────────
+  // Set default based on note's existing due_at or current time
+  if (note.due_at) {
+    try {
+      const d = new Date(note.due_at);
+      selMins = d.getHours() * 60 + d.getMinutes();
+      selMins = Math.round(selMins / 5) * 5;
+      selMins = Math.min(_SCHED_MIN_END, Math.max(_SCHED_MIN_START, selMins));
+      // Auto-select day
+      const today = new Date();
+      if (d.toDateString() === today.toDateString()) {
+        const h = d.getHours();
+        selDay = h < 12 ? 'today-am' : h < 18 ? 'today-pm' : 'today-eve';
+      }
+      overlay.querySelectorAll('.sched-day-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.day === selDay);
+      });
+    } catch (_) {}
+  }
+  updateDisplay();
+  // Defer drum scroll to after layout
+  requestAnimationFrame(() => { scrollDrumTo(selMins, false); updateSlotClasses(); });
+}
+
 // v1.26/v1.28 · 用时统计视图（列表 + 图表双模式）
 async function renderTimeStats(el, filterBarHtml) {
   // v1.28: 图表模式
@@ -1459,6 +1755,11 @@ function renderFeed() {
           }
         }
 
+        // v1.29: 时间块安排按钮（仅 tag=todo 主卡未归档）
+        const scheduleBtn = (isMain && n.tag === 'todo' && !n.archived)
+          ? `<button class="schedule-btn" aria-label="安排时间块" title="安排时间块">⏰</button>`
+          : '';
+
         // v1.25: 进行中状态切换按钮（仅 tag=todo 主卡未归档）
         let progressToggleBtn = '';
         if (isMain && n.tag === 'todo' && !n.archived) {
@@ -1476,6 +1777,7 @@ function renderFeed() {
               ${isMain && !n.archived ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
               ${isMain && !n.archived ? '<button class="more-btn" aria-label="更多操作" title="更多">⋯</button>' : ''}
               <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+              ${scheduleBtn}
               ${progressToggleBtn}
               ${archiveBtn}
               <button class="delete-btn" aria-label="删除">✕</button>
@@ -1581,6 +1883,17 @@ function renderFeed() {
         btn.textContent = '⚠️';
         btn.disabled = false;
       }
+    });
+  });
+
+  // v1.29: ⏰ 安排时间块
+  el.querySelectorAll('.schedule-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const noteEl = btn.closest('.note');
+      if (!noteEl) return;
+      const note = state.notes.find(x => x.id === noteEl.dataset.id);
+      if (note) showSchedulerPopup(note.id, note);
     });
   });
 
