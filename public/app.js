@@ -30,8 +30,19 @@ const state = {
   hasMore: false,
   loading: false,
   searchQuery: '',   // v1.11 · 搜索关键词，非空时 loadFeed 走 q 查询
-  activeFilter: '',  // v1.12 · '' | 'todo' | 'progress' | 'idea' | 'milestone' | 'feedback' | 'summary'
+  activeFilter: '',  // v1.12 · '' | 'todo' | 'progress' | 'idea' | 'milestone' | 'feedback' | 'summary' | 'time'
+  viewMode: (typeof localStorage !== 'undefined' && localStorage.getItem('pf-view-mode') === 'timeline') ? 'timeline' : 'project',  // v1.27 · 默认项目分组，仅在「全部」tab 生效
+  timePeriod: 'all',     // v1.26 · 用时统计周期
+  timeView: 'list',      // v1.28 · 'list' | 'chart'
+  timeChartPeriod: 'week', // v1.28 · 图表周期
 };
+
+// ---------- Feed Cache ----------
+// v1.18: tab+filter+search 维度的短时缓存，切 tab 秒出
+const _feedCache = new Map();
+const FEED_CACHE_TTL = 20_000;
+function _feedCacheKey() { return `${state.currentTab}|${state.activeFilter}|${state.searchQuery}|${state.viewMode}`; }
+function invalidateFeedCache() { _feedCache.clear(); }
 
 // v1.12/v1.13 · filter chip 定义（UI 7 维，Option 2 映射到后端 WHERE）
 const FILTER_CHIPS = [
@@ -41,7 +52,8 @@ const FILTER_CHIPS = [
   { key: 'milestone',  icon: '🏁', label: '里程碑' },
   { key: 'feedback',   icon: '📥', label: '反馈' },
   { key: 'summary',    icon: '🤖', label: '总结' },
-  { key: 'archived',   icon: '📦', label: '已完成' },   // v1.13 · 归档视图（用 📦 避免和 progress 的 ✅ 混淆）
+  { key: 'archived',   icon: '📦', label: '已完成' },
+  { key: 'time',       icon: '⏱', label: '用时' },   // v1.26 · 用时统计
 ];
 
 // ---------- Toast ----------
@@ -102,46 +114,66 @@ async function api(path, opts = {}) {
 }
 
 async function loadConfig() {
-  const data = await api('/api/config');
+  // v1.18: config 和 project-stats 真正并行（原来是串行，尽管注释写"并发"）
+  const [data, statsResult] = await Promise.all([
+    api('/api/config'),
+    api('/api/project-stats?days=7').catch(() => null),
+  ]);
   state.projects = data.projects || [];
-  state.people = [];    // not used in single-user mode
-  // 并发拉 7 天活跃度，用于 Tab 排序（最近热门项目前置）
-  try {
-    const s = await api('/api/project-stats?days=7');
-    state.projectStats = s.stats || {};
-  } catch {
-    state.projectStats = {};
+  state.people = [];
+  state.projectStats = (statsResult && statsResult.stats) || {};
+  // v1.26.1: 自动更新设置页版本号
+  if (data.version) {
+    const el = document.getElementById('app-version');
+    if (el) el.textContent = `v${data.version}`;
   }
 }
 
 async function loadFeed(append = false) {
   if (state.loading) return;
+  // v1.18: 短时缓存（20s TTL），切 tab 秒出；写操作调 invalidateFeedCache() 失效
+  if (!append) {
+    const hit = _feedCache.get(_feedCacheKey());
+    if (hit && Date.now() - hit.ts < FEED_CACHE_TTL) {
+      state.notes = hit.notes;
+      state.hasMore = hit.hasMore;
+      return;
+    }
+  }
   state.loading = true;
   try {
     const params = new URLSearchParams();
     if (state.currentTab !== 'all') params.set('project', state.currentTab);
-    // v1.11/v1.12: 搜索或筛选激活时扩大 limit + 停止无限滚动分页
     const searching = !!state.searchQuery;
     const filtering = !!state.activeFilter;
+    // v1.27: 项目分组视图（全部 tab）拉更多数据，其余逻辑不变
+    const projectViewActive = state.currentTab === 'all' && state.viewMode === 'project' && !searching;
     const narrowing = searching || filtering;
-    params.set('limit', narrowing ? '100' : '30');
+    params.set('limit', projectViewActive ? '200' : (narrowing ? '100' : '30'));
     if (searching) params.set('q', state.searchQuery);
     if (filtering) params.set('filter', state.activeFilter);
     if (append && state.notes.length > 0) {
       params.set('before', state.notes[state.notes.length - 1].created_at);
     }
     const data = await api('/api/notes?' + params.toString());
-    state.notes = append ? [...state.notes, ...(data.notes || [])] : (data.notes || []);
-    state.hasMore = narrowing ? false : !!data.hasMore;
+    const fresh = data.notes || [];
+    const hasMore = narrowing ? false : !!data.hasMore;
+    state.notes = append ? [...state.notes, ...fresh] : fresh;
+    state.hasMore = hasMore;
+    if (!append) {
+      _feedCache.set(_feedCacheKey(), { notes: fresh, hasMore, ts: Date.now() });
+    }
   } finally {
     state.loading = false;
   }
 }
 
-async function postNote(project_id, content, tag) {
+async function postNote(project_id, content, tag, due_at = null) {
+  const payload = { project_id, content, tag };
+  if (due_at) payload.due_at = due_at;
   return api('/api/notes', {
     method: 'POST',
-    body: JSON.stringify({ project_id, content, tag }),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -155,6 +187,11 @@ async function archiveNote(noteId) {
 }
 async function unarchiveNote(noteId) {
   return api(`/api/notes/${noteId}/unarchive`, { method: 'POST' });
+}
+
+// v1.25
+async function toggleNoteStatus(noteId) {
+  return api(`/api/notes/${noteId}/toggle-status`, { method: 'POST' });
 }
 
 // v1.16
@@ -186,8 +223,52 @@ async function correctText(text) {
   return api('/api/ai/correct', {
     method: 'POST',
     body: JSON.stringify({ text }),
-    timeoutMs: LLM_TIMEOUT_MS,  // v1.16.7: MiniMax 调用可能 5-30s
+    timeoutMs: LLM_TIMEOUT_MS,
   });
+}
+
+async function splitTasks(text, projectName = '') {
+  return api('/api/ai/split-tasks', {
+    method: 'POST',
+    body: JSON.stringify({ text, project_name: projectName }),
+    timeoutMs: LLM_TIMEOUT_MS,
+  });
+}
+
+// 计算任务截止时间（本地时间 UTC+8）
+function calcTaskDueDate(option) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const toISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00+08:00`;
+
+  if (option === 'today') {
+    const d10 = new Date(now.getTime() + 10 * 60 * 1000); // 当前时间 +10 分钟，避免立即过期
+    return toISO(d10);
+  }
+
+  // 以下选项统一用 09:00
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0);
+
+  if (option === 'tomorrow') {
+    d.setDate(d.getDate() + 1);
+    return toISO(d);
+  }
+  if (option === 'thisweek') {
+    const dow = d.getDay(); // 0=Sun,1=Mon,...,6=Sat
+    if (dow === 1 || dow === 2) {
+      d.setDate(d.getDate() + (3 - dow)); // 周一/周二 → 本周三
+    } else {
+      const daysToFri = dow <= 5 ? (5 - dow) : (5 + 7 - dow); // 周三以后 → 本周五
+      d.setDate(d.getDate() + daysToFri);
+    }
+    return toISO(d);
+  }
+  if (option === 'nextweek') {
+    const dow = d.getDay();
+    d.setDate(d.getDate() + (dow === 0 ? 1 : 8 - dow)); // → 下周一
+    return toISO(d);
+  }
+  return toISO(now);
 }
 
 async function summarize(timeRange, project, include_progress, include_knowledge) {
@@ -350,9 +431,422 @@ function formatDueAt(dueAt) {
     const sameYear = due.getFullYear() === now.getFullYear();
     datePart = sameYear ? `${due.getMonth() + 1}月${due.getDate()}日` : `${due.getFullYear()}年${due.getMonth() + 1}月${due.getDate()}日`;
   }
-  // 已过期标记
-  if (due < now) return `${icon} 已过期（${datePart} ${time}）`;
+  // 已过期：只显示日期，不显示时间
+  if (due < now) return `${icon} 已过期 ${datePart}`;
   return `${icon} ${datePart} ${time}`;
+}
+
+// v1.26.1 · 过期任务重设截止时间
+async function rescheduleNote(noteId, dueAt) {
+  return api(`/api/notes/${noteId}/reschedule`, {
+    method: 'POST',
+    body: JSON.stringify({ due_at: dueAt }),
+  });
+}
+
+function _toCSTIso(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00+08:00`;
+}
+
+function _getRescheduleOptions() {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun 1=Mon...6=Sat
+  const at = (base, h, m) => { const d = new Date(base); d.setHours(h, m, 0, 0); return d; };
+  const addDays = n => { const d = new Date(now); d.setDate(d.getDate() + n); return d; };
+  const toFri = (5 - day + 7) % 7; // 0 if today is Friday
+  const toMon = (1 - day + 7) % 7 || 7; // days to next Monday (≥1)
+  return [
+    { key: 'today',    label: '今天',   d: at(now, 18, 0) },
+    { key: 'tomorrow', label: '明天',   d: at(addDays(1), 18, 0) },
+    { key: 'thisweek', label: '本周内', d: at(addDays(toFri), 18, 0) },
+    { key: 'nextweek', label: '下周',   d: at(addDays(toMon), 9, 0) },
+  ];
+}
+
+function _fmtRspDate(d) {
+  const day = ['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  const p = n => String(n).padStart(2, '0');
+  return `${day} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+let _rspPopup = null;
+function dismissReschedulePopup() {
+  if (_rspPopup) { _rspPopup.remove(); _rspPopup = null; }
+}
+
+function showReschedulePopup(noteId, anchorEl) {
+  dismissReschedulePopup();
+  const opts = _getRescheduleOptions();
+
+  const popup = document.createElement('div');
+  popup.className = 'reschedule-popup';
+  popup.innerHTML = `
+    <div class="rsp-title">重设截止时间</div>
+    ${opts.map(o => `
+      <button class="rsp-btn" data-key="${o.key}">
+        <span class="rsp-label">${o.label}</span>
+        <span class="rsp-date">${_fmtRspDate(o.d)}</span>
+      </button>`).join('')}
+  `;
+  document.body.appendChild(popup);
+  _rspPopup = popup;
+
+  // 定位：锚点正下方，避免超出屏幕
+  const rect = anchorEl.getBoundingClientRect();
+  const pw = 172;
+  let left = rect.left;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  popup.style.left = `${Math.max(8, left)}px`;
+  popup.style.top = `${rect.bottom + 6}px`;
+
+  popup.querySelectorAll('.rsp-btn').forEach(btn => {
+    btn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const opt = opts.find(o => o.key === btn.dataset.key);
+      if (!opt) return;
+      dismissReschedulePopup();
+      try {
+        const isoStr = _toCSTIso(opt.d);
+        await rescheduleNote(noteId, isoStr);
+        const note = state.notes.find(x => x.id === noteId);
+        if (note) { note.due_at = isoStr; note.updated_at = new Date().toISOString(); }
+        invalidateFeedCache();
+        renderFeed();
+        toast(`已重设为 ${opt.label}`);
+      } catch (err) {
+        toast('更新失败：' + err.message, true);
+      }
+    });
+  });
+
+  setTimeout(() => document.addEventListener('click', dismissReschedulePopup, { once: true }), 0);
+}
+
+// v1.28 · Chart.js 懒加载，多 CDN 顺序回退
+let _chartJsReady = false;
+async function loadChartJs() {
+  if (_chartJsReady || window.Chart) { _chartJsReady = true; return; }
+  const CDNS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js',
+    'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+    'https://unpkg.com/chart.js@4.4.4/dist/chart.umd.min.js',
+  ];
+  const loadScript = (src) => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src;
+    const t = setTimeout(() => { s.remove(); rej(new Error('timeout')); }, 8000);
+    s.onload = () => { clearTimeout(t); _chartJsReady = true; res(); };
+    s.onerror = (e) => { clearTimeout(t); s.remove(); rej(e); };
+    document.head.appendChild(s);
+  });
+  for (const cdn of CDNS) {
+    try { await loadScript(cdn); return; } catch (_) {}
+  }
+  throw new Error('Chart.js 加载失败，请检查网络连接');
+}
+
+// 项目调色板（与 project sort_order 对应）
+const CHART_PALETTE = [
+  '#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6',
+  '#06b6d4','#f97316','#ec4899','#84cc16','#64748b',
+  '#0ea5e9','#a855f7','#14b8a6','#fb923c','#e879f9',
+];
+function _projectColor(pid, projectsMap) {
+  const ids = Object.keys(projectsMap).sort();
+  const idx = ids.indexOf(pid);
+  return CHART_PALETTE[Math.max(0, idx) % CHART_PALETTE.length];
+}
+
+// v1.28 · 图表视图渲染
+let _activeCharts = [];
+function _destroyCharts() {
+  _activeCharts.forEach(c => { try { c.destroy(); } catch (_) {} });
+  _activeCharts = [];
+}
+
+// 周期配置
+const CHART_PERIODS = [
+  { key: 'today',   label: '今日' },
+  { key: 'week',    label: '本周' },
+  { key: 'month',   label: '本月' },
+  { key: '3month',  label: '近三月' },
+  { key: 'year',    label: '全年' },
+];
+
+async function renderTimeChartView(el, filterBarHtml) {
+  const period  = state.timeChartPeriod  || 'week';
+  const project = state.timeChartProject || 'all';
+
+  const periodBtns = CHART_PERIODS.map(p =>
+    `<button class="period-btn${period===p.key?' active':''}" data-chart-period="${p.key}">${p.label}</button>`
+  ).join('');
+
+  el.innerHTML = filterBarHtml + `
+    <div class="time-header">
+      <div class="time-title-row">
+        <span class="time-title">⏱ 用时统计</span>
+        <div style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap">
+          <div class="time-period-row" style="flex-wrap:nowrap">${periodBtns}</div>
+          <button class="chart-view-toggle is-active" data-view="list" title="切换到列表">📋</button>
+        </div>
+      </div>
+    </div>
+    <div id="proj-selector-row" class="proj-selector-row"></div>
+    <div id="chart-loading" class="time-loading">加载图表中…</div>
+  `;
+  bindFilterBar(el);
+
+  el.querySelectorAll('[data-chart-period]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      state.timeChartPeriod = btn.dataset.chartPeriod;
+      _destroyCharts();
+      await renderTimeChartView(el, renderFilterBarHtml());
+    });
+  });
+  el.querySelector('[data-view="list"]')?.addEventListener('click', async () => {
+    state.timeView = 'list';
+    _destroyCharts();
+    await renderTimeStats(el, renderFilterBarHtml());
+  });
+
+  try {
+    await loadChartJs();
+    const url = `/api/stats/time-chart?period=${period}&project=${encodeURIComponent(project)}`;
+    const data = await api(url);
+    _buildProjSelector(el, data, period);
+    _renderCharts(el, data, period, project);
+  } catch (e) {
+    const ld = document.getElementById('chart-loading');
+    if (ld) ld.textContent = '图表加载失败：' + e.message;
+    toast('图表加载失败：' + e.message, true);
+  }
+}
+
+function _buildProjSelector(el, data, period) {
+  const row = document.getElementById('proj-selector-row');
+  if (!row) return;
+  const { allProjects = [], projectTotals = {} } = data;
+  const proj = state.timeChartProject || 'all';
+  const btns = [{ id: 'all', name: '全部', emoji: '🗂' }, ...allProjects]
+    .map(p => {
+      const active = proj === p.id;
+      const secs = p.id === 'all'
+        ? Object.values(projectTotals).reduce((s, v) => s + v, 0)
+        : (projectTotals[p.id] || 0);
+      const timeStr = secs > 0 ? ` · ${formatSeconds(secs)}` : '';
+      return `<button class="proj-sel-btn${active ? ' active' : ''}" data-proj="${escapeHtml(p.id)}">
+        ${p.emoji || '📁'} ${escapeHtml(p.name)}${timeStr}
+      </button>`;
+    }).join('');
+  row.innerHTML = btns;
+  row.querySelectorAll('.proj-sel-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      state.timeChartProject = btn.dataset.proj;
+      _destroyCharts();
+      await renderTimeChartView(el.closest('#feed') || el, renderFilterBarHtml());
+    });
+  });
+}
+
+function _renderCharts(el, data, period, project) {
+  const { labels = [], groupedByDay = {}, projectTotals = {}, projects = {}, tasks = [] } = data;
+  const ld = document.getElementById('chart-loading');
+  if (ld) ld.remove();
+
+  const pids = Object.keys(projectTotals).filter(pid => projectTotals[pid] > 0)
+    .sort((a, b) => projectTotals[b] - projectTotals[a]);
+  const totalAll = pids.reduce((s, pid) => s + projectTotals[pid], 0);
+
+  // x 轴标签格式化
+  const dayNames = ['日','一','二','三','四','五','六'];
+  const xLabels = labels.map(d => {
+    if (/^\d{4}-\d{2}$/.test(d)) return d.slice(5) + '月'; // year period: YYYY-MM
+    if (/^\d{2}\/\d{2}$/.test(d)) return d; // 3month: MM/DD
+    try {
+      const dt = new Date(d + 'T12:00:00+08:00');
+      if (period === 'today') return `${d.slice(5)}`;
+      return `${d.slice(5)} 周${dayNames[dt.getDay()]}`;
+    } catch { return d; }
+  });
+
+  const wrap = document.createElement('div');
+  wrap.className = 'chart-wrap';
+  el.appendChild(wrap);
+
+  if (!pids.length) {
+    wrap.innerHTML = '<div class="time-empty">暂无用时数据<br><small class="muted">在待办任务上点击 ▶️ 开始计时后数据将显示在此</small></div>';
+    return;
+  }
+
+  const projName = project !== 'all' ? `${projects[project]?.emoji || ''} ${projects[project]?.name || project}` : '全部项目';
+
+  wrap.innerHTML = `<div class="chart-summary">${projName} · 累计 <strong>${formatSeconds(totalAll)}</strong></div>`;
+
+  if (project === 'all') {
+    // 全部项目：堆叠条形图 + 环形图
+    wrap.insertAdjacentHTML('beforeend', `
+      <div class="chart-section">
+        <div class="chart-label">时间分布 · 按项目堆叠</div>
+        <div class="chart-canvas-box"><canvas id="chart-stacked"></canvas></div>
+      </div>
+      <div class="chart-section">
+        <div class="chart-label">项目用时占比</div>
+        <div class="chart-canvas-box chart-donut-box"><canvas id="chart-donut"></canvas></div>
+      </div>
+    `);
+
+    const stackedCtx = document.getElementById('chart-stacked')?.getContext('2d');
+    if (stackedCtx) {
+      const datasets = pids.map(pid => ({
+        label: `${projects[pid]?.emoji || '📁'} ${projects[pid]?.name || pid}`,
+        data: labels.map(l => Math.round((groupedByDay[l]?.[pid] || 0) / 60)),
+        backgroundColor: _projectColor(pid, projects),
+        borderRadius: 3, borderSkipped: false,
+      }));
+      _activeCharts.push(new Chart(stackedCtx, {
+        type: 'bar',
+        data: { labels: xLabels, datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${formatSeconds(ctx.raw * 60)}` } }
+          },
+          scales: {
+            x: { stacked: true, grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45 } },
+            y: { stacked: true, beginAtZero: true,
+              ticks: { callback: v => v + 'm', font: { size: 11 } },
+              grid: { color: 'rgba(0,0,0,0.06)' }
+            },
+          },
+        },
+      }));
+    }
+
+    const donutCtx = document.getElementById('chart-donut')?.getContext('2d');
+    if (donutCtx) {
+      _activeCharts.push(new Chart(donutCtx, {
+        type: 'doughnut',
+        data: {
+          labels: pids.map(pid => `${projects[pid]?.emoji || ''} ${projects[pid]?.name || pid}`),
+          datasets: [{ data: pids.map(pid => Math.round(projectTotals[pid] / 60)),
+            backgroundColor: pids.map(pid => _projectColor(pid, projects)),
+            borderWidth: 2, borderColor: '#fff' }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '62%',
+          plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${formatSeconds(ctx.raw * 60)} (${Math.round(ctx.raw / Math.max(1, totalAll / 60) * 100)}%)` } }
+          },
+        },
+      }));
+    }
+
+  } else {
+    // 单个项目：时间轴单色条形图 + 任务水平条
+    const color = _projectColor(project, projects);
+    wrap.insertAdjacentHTML('beforeend', `
+      <div class="chart-section">
+        <div class="chart-label">时间轴分布</div>
+        <div class="chart-canvas-box"><canvas id="chart-proj-bar"></canvas></div>
+      </div>
+      <div class="chart-section">
+        <div class="chart-label">任务用时 · 从长到短</div>
+        <div class="chart-canvas-box chart-task-box"><canvas id="chart-tasks"></canvas></div>
+      </div>
+    `);
+
+    const barCtx = document.getElementById('chart-proj-bar')?.getContext('2d');
+    if (barCtx) {
+      _activeCharts.push(new Chart(barCtx, {
+        type: 'bar',
+        data: {
+          labels: xLabels,
+          datasets: [{
+            label: projName,
+            data: labels.map(l => Math.round((groupedByDay[l]?.[project] || 0) / 60)),
+            backgroundColor: color + 'cc',
+            borderColor: color,
+            borderWidth: 1.5, borderRadius: 4, borderSkipped: false,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${formatSeconds(ctx.raw * 60)}` } }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45 } },
+            y: { beginAtZero: true,
+              ticks: { callback: v => v + 'm', font: { size: 11 } },
+              grid: { color: 'rgba(0,0,0,0.06)' }
+            },
+          },
+        },
+      }));
+    }
+
+    // 任务水平条
+    const taskCtx = document.getElementById('chart-tasks')?.getContext('2d');
+    if (taskCtx && tasks.length) {
+      const topTasks = tasks.slice(0, 10);
+      const taskLabels = topTasks.map(t => extractTitle(t.content, 22));
+      const taskData = topTasks.map(t => Math.round(t.seconds / 60));
+      const taskH = Math.max(180, topTasks.length * 36);
+      document.querySelector('.chart-task-box').style.height = taskH + 'px';
+      _activeCharts.push(new Chart(taskCtx, {
+        type: 'bar',
+        data: {
+          labels: taskLabels,
+          datasets: [{ data: taskData,
+            backgroundColor: color + 'bb', borderColor: color,
+            borderWidth: 1, borderRadius: 4,
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${formatSeconds(ctx.raw * 60)}` } }
+          },
+          scales: {
+            x: { beginAtZero: true, ticks: { callback: v => v + 'm', font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.06)' } },
+            y: { grid: { display: false }, ticks: { font: { size: 12 } } },
+          },
+        },
+      }));
+    } else if (taskCtx) {
+      wrap.querySelector('.chart-task-box').innerHTML = '<div class="time-empty" style="height:100%;display:flex;align-items:center;justify-content:center">暂无任务数据</div>';
+    }
+  }
+}
+
+// v1.26 · 秒数 → 人类可读时间（"23m" / "1h 5m"）
+function formatSeconds(s) {
+  if (!s || s <= 0) return '0m';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${Math.max(1, m)}m`;
+}
+
+// v1.26 · 实时计时器（每秒更新所有 .timer-badge 元素）
+let _timerInterval = null;
+function startLiveTimers() {
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  if (!document.querySelector('.timer-badge[data-start-at]')) return;
+  _timerInterval = setInterval(() => {
+    document.querySelectorAll('.timer-badge[data-start-at]').forEach(el => {
+      const base = parseInt(el.dataset.baseSecs || '0', 10);
+      const startAt = el.dataset.startAt;
+      const elapsed = startAt ? Math.floor((Date.now() - new Date(startAt).getTime()) / 1000) : 0;
+      el.textContent = '▶ ' + formatSeconds(base + Math.max(0, elapsed));
+    });
+  }, 1000);
 }
 
 // Core: escape + apply money/unit/percent/date/time/person highlights to raw text
@@ -431,14 +925,22 @@ function renderEmpty() {
   `;
 }
 
-// v1.12 · filter bar
+// v1.27 · filter bar（视图切换按钮置于最前，仅「全部」tab 显示）
 function renderFilterBarHtml() {
   const chips = FILTER_CHIPS.map(c => {
     const active = state.activeFilter === c.key;
     const cls = active ? `filter-chip active-${c.key}` : 'filter-chip';
     return `<button class="${cls}" data-filter="${escapeHtml(c.key)}" type="button" aria-pressed="${active ? 'true' : 'false'}">${c.icon} ${escapeHtml(c.label)}</button>`;
   }).join('');
-  return `<div class="filter-bar" role="toolbar" aria-label="按标签筛选">${chips}</div>`;
+  let viewBtn = '';
+  if (state.currentTab === 'all') {
+    const isProject = state.viewMode === 'project';
+    // 图标显示"点击后切换到的视图"，直观告知当前能做什么
+    const icon = isProject ? '📅' : '🗂';
+    const title = isProject ? '切换到时间视图' : '切换到项目分组视图';
+    viewBtn = `<button class="view-mode-btn${isProject ? '' : ' is-active'}" data-action="toggle-view" type="button" title="${title}">${icon}</button><span class="view-mode-sep"></span>`;
+  }
+  return `<div class="filter-bar" role="toolbar" aria-label="按标签筛选">${viewBtn}${chips}</div>`;
 }
 
 function bindFilterBar(root) {
@@ -454,6 +956,18 @@ function bindFilterBar(root) {
         toast('筛选失败：' + e.message, true);
       }
     });
+  });
+  // v1.27: 视图切换（项目分组 ⇄ 时间视图）
+  root.querySelector('.view-mode-btn')?.addEventListener('click', async () => {
+    state.viewMode = state.viewMode === 'project' ? 'timeline' : 'project';
+    try { localStorage.setItem('pf-view-mode', state.viewMode); } catch {}
+    invalidateFeedCache();
+    try {
+      await loadFeed();
+      renderFeed();
+    } catch (e) {
+      toast('切换视图失败：' + e.message, true);
+    }
   });
 }
 
@@ -547,6 +1061,8 @@ function setupSwipeTabs() {
   let tracking = false;
   feed.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) { tracking = false; return; }
+    // filter-bar 内的滑动只做横向滚动，不触发 tab 切换
+    if (e.target.closest('.filter-bar')) { tracking = false; return; }
     const t = e.touches[0];
     startX = t.clientX;
     startY = t.clientY;
@@ -683,6 +1199,87 @@ function renderKnowledgeCard(k) {
   `;
 }
 
+// v1.26/v1.28 · 用时统计视图（列表 + 图表双模式）
+async function renderTimeStats(el, filterBarHtml) {
+  // v1.28: 图表模式
+  if (state.timeView === 'chart') {
+    _destroyCharts();
+    await renderTimeChartView(el, filterBarHtml);
+    return;
+  }
+
+  el.innerHTML = filterBarHtml + '<div class="time-loading">⏳ 加载用时数据…</div>';
+  bindFilterBar(el);
+  try {
+    const data = await api(`/api/stats/time?period=${encodeURIComponent(state.timePeriod || 'all')}`);
+    const { projects = [], period } = data;
+    const totalSecs = projects.reduce((s, p) => s + p.total_seconds, 0);
+    const totalTasks = projects.reduce((s, p) => s + p.tasks.length, 0);
+
+    const periodBtns = [['week','本周'],['month','本月'],['all','全部']].map(([k, lbl]) =>
+      `<button class="period-btn${period === k ? ' active' : ''}" data-period="${k}">${lbl}</button>`
+    ).join('');
+
+    const header = `
+      <div class="time-header">
+        <div class="time-title-row">
+          <span class="time-title">⏱ 用时统计</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <div class="time-period-row">${periodBtns}</div>
+            <button class="chart-view-toggle" data-view="chart" title="切换到图表">📊</button>
+          </div>
+        </div>
+        <div class="time-summary">${totalTasks} 个任务 · ${projects.length} 个项目 · 累计 <strong>${formatSeconds(totalSecs)}</strong></div>
+      </div>`;
+
+    const projectsHtml = projects.length ? projects.map(p => {
+      const projTotal = formatSeconds(p.total_seconds);
+      const tasksHtml = p.tasks.map(t => {
+        const isRunning = !t.archived && t.status === 'in_progress' && t.session_start_at;
+        const timeEl = isRunning
+          ? `<span class="timer-badge task-timer" data-start-at="${escapeHtml(t.session_start_at)}" data-base-secs="${t.total_seconds}">▶ ${formatSeconds(t.total_seconds)}</span>`
+          : `<span class="task-time-static">${formatSeconds(t.total_seconds)}</span>`;
+        const badge = t.archived
+          ? '<span class="task-status-badge done">✅ 已完成</span>'
+          : t.status === 'in_progress'
+            ? '<span class="task-status-badge running">▶ 进行中</span>'
+            : '<span class="task-status-badge pending">🎯 待办</span>';
+        return `<div class="time-task-row">
+          <span class="time-task-title">${escapeHtml(extractTitle(t.content, 48))}</span>
+          <span class="time-task-right">${timeEl}${badge}</span>
+        </div>`;
+      }).join('');
+      return `<div class="time-project-group">
+        <div class="time-project-header">
+          <span class="time-proj-emoji">${escapeHtml(p.project_emoji)}</span>
+          <span class="time-proj-name">${escapeHtml(p.project_name)}</span>
+          <span class="time-proj-total">${projTotal}</span>
+          <span class="time-proj-count">${p.tasks.length} 个任务</span>
+        </div>
+        <div class="time-task-list">${tasksHtml}</div>
+      </div>`;
+    }).join('')
+    : '<div class="time-empty">暂无用时记录<br><small class="muted">在待办任务上点击 ▶️ 开始计时</small></div>';
+
+    el.innerHTML = filterBarHtml + header + projectsHtml;
+    bindFilterBar(el);
+    el.querySelectorAll('.period-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        state.timePeriod = btn.dataset.period;
+        await renderTimeStats(el, renderFilterBarHtml());
+      });
+    });
+    // 📊 切换到图表
+    el.querySelector('[data-view="chart"]')?.addEventListener('click', async () => {
+      state.timeView = 'chart';
+      await renderTimeStats(el, renderFilterBarHtml());
+    });
+    startLiveTimers();
+  } catch (e) {
+    toast('加载用时统计失败：' + e.message, true);
+  }
+}
+
 function renderFeed() {
   const el = $('feed');
   if (!el) return;
@@ -690,6 +1287,13 @@ function renderFeed() {
   activeAiCard = null;
 
   const filterBarHtml = renderFilterBarHtml();  // v1.12
+
+  // v1.26: 用时统计视图独立渲染，不走 feed 逻辑
+  if (state.activeFilter === 'time') {
+    renderTimeStats(el, filterBarHtml);
+    return;
+  }
+
   const emptyHtml = () => {
     if (state.searchQuery) {
       return `<div class="search-empty"><div class="big">🔍</div><p>没有找到 "${escapeHtml(state.searchQuery)}"</p></div>`;
@@ -728,15 +1332,46 @@ function renderFeed() {
   }
 
   // v1.15: filter=todo 时扁平排序（按 due_at 由近及远），不做日期分组
-  const groups = state.activeFilter === 'todo'
-    ? [{ label: '⏰ 按截止时间排序', notes: regularNotes }]
-    : groupNotesByDate(regularNotes);
   const projectMap = Object.fromEntries(state.projects.map(p => [p.id, p]));
   const showProjectBadge = state.currentTab === 'all';
 
+  // v1.27: 项目分组视图（全部 tab + 非搜索），适用于所有卡片类型
+  const projectViewActive = state.currentTab === 'all' && state.viewMode === 'project' && !state.searchQuery;
+  let groups;
+  if (projectViewActive) {
+    const byProject = {};
+    for (const n of regularNotes) (byProject[n.project_id] ||= []).push(n);
+    const projectGroups = Object.entries(byProject).map(([pid, ns]) => {
+      ns.sort((a, b) => {
+        // todo 卡：按 due_at 紧迫度排序；其他卡：按创建时间倒序
+        if (state.activeFilter === 'todo' || (!state.activeFilter && a.tag === 'todo')) {
+          const aD = a.due_at ? new Date(a.due_at) : new Date('9999');
+          const bD = b.due_at ? new Date(b.due_at) : new Date('9999');
+          return aD - bD;
+        }
+        return new Date(b.created_at) - new Date(a.created_at);
+      });
+      return { proj: projectMap[pid], notes: ns };
+    }).sort((a, b) => (a.proj?.sort_order ?? 999) - (b.proj?.sort_order ?? 999));
+
+    groups = projectGroups.map(pg => ({
+      cls: 'project-section',
+      headerHtml: `<header class="project-section-head">
+        <span class="proj-emoji">${pg.proj?.emoji || '📁'}</span>
+        <span class="proj-name">${escapeHtml(pg.proj?.name || '未知项目')}</span>
+        <span class="proj-count">${pg.notes.length}</span>
+      </header>`,
+      notes: pg.notes,
+    }));
+  } else {
+    groups = state.activeFilter === 'todo'
+      ? [{ label: '⏰ 按截止时间排序', notes: regularNotes }]
+      : groupNotesByDate(regularNotes);
+  }
+
   const groupsHtml = groups.map(g => `
-    <div class="date-group">
-      <div class="date-divider">${escapeHtml(g.label)}</div>
+    <div class="${g.cls || 'date-group'}">
+      ${g.headerHtml || `<div class="date-divider">${escapeHtml(g.label)}</div>`}
       ${g.notes.map(n => {
         const proj = projectMap[n.project_id];
         const projLabel = proj ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}` : escapeHtml(n.project_id);
@@ -808,15 +1443,28 @@ function renderFeed() {
           classes.push(`due-${u}`);
           urgencyLabel = formatDueAt(n.due_at);
         }
+        // v1.25: 进行中 todo 卡加渐变背景
+        const isInProgress = isMain && n.tag === 'todo' && !n.archived && n.status === 'in_progress';
+        if (isInProgress) classes.push('is-in-progress');
 
-        // v1.13: tag=todo 未归档 → ✅ 打勾；归档视图 → ↶ 还原
+        // v1.13: todo 未归档 → ✅；v1.22: 其他 main 卡未归档 → 📦；归档后 → ↶ 还原
         let archiveBtn = '';
         if (isMain) {
           if (n.archived) {
-            archiveBtn = '<button class="unarchive-btn" aria-label="还原到待办" title="还原">↶</button>';
+            archiveBtn = '<button class="unarchive-btn" aria-label="还原" title="还原">↶</button>';
           } else if (n.tag === 'todo') {
             archiveBtn = '<button class="archive-btn" aria-label="标记完成" title="打勾完成">✅</button>';
+          } else {
+            archiveBtn = '<button class="archive-btn archive-silent-btn" aria-label="归档" title="归档（不删除，可在「已完成」视图找回）">📦</button>';
           }
+        }
+
+        // v1.25: 进行中状态切换按钮（仅 tag=todo 主卡未归档）
+        let progressToggleBtn = '';
+        if (isMain && n.tag === 'todo' && !n.archived) {
+          const icon = isInProgress ? '⏸' : '▶️';
+          const label = isInProgress ? '暂停（回到待办）' : '标记进行中';
+          progressToggleBtn = `<button class="progress-toggle-btn${isInProgress ? ' is-active' : ''}" aria-label="${label}" title="${label}">${icon}</button>`;
         }
 
         return `
@@ -828,13 +1476,17 @@ function renderFeed() {
               ${isMain && !n.archived ? '<button class="chat-btn" aria-label="问 AI" title="基于这条进展问 AI">🤖</button>' : ''}
               ${isMain && !n.archived ? '<button class="more-btn" aria-label="更多操作" title="更多">⋯</button>' : ''}
               <button class="edit-btn" aria-label="编辑" title="编辑">✏️</button>
+              ${progressToggleBtn}
               ${archiveBtn}
               <button class="delete-btn" aria-label="删除">✕</button>
             </div>
             <div class="note-body">${applyInlineHighlights(renderMarkdown(n.content))}</div>
             <div class="note-foot">
               <span class="note-time">${formatCardDateTime(n.created_at)}${n.updated_at ? ' · 已编辑' : ''}${n.archived_at ? ' · 完成于 ' + formatCardDateTime(n.archived_at) : ''}</span>
-              ${urgencyLabel ? `<span class="note-due">${escapeHtml(urgencyLabel)}</span>` : ''}
+              ${isInProgress && n.session_start_at
+                ? `<span class="timer-badge" data-start-at="${escapeHtml(n.session_start_at)}" data-base-secs="${n.total_seconds || 0}">▶ ${formatSeconds(n.total_seconds || 0)}</span>`
+                : (n.total_seconds > 0 ? `<span class="time-spent-badge">⏱ ${formatSeconds(n.total_seconds)}</span>` : '')}
+              ${urgencyLabel ? `<span class="note-due${n.due_at && new Date(n.due_at) < new Date() ? ' is-overdue' : ''}">${escapeHtml(urgencyLabel)}</span>` : ''}
               ${showProjectBadge ? `<span class="note-project">${projLabel}</span>` : '<span></span>'}
             </div>
           </article>
@@ -853,6 +1505,9 @@ function renderFeed() {
 
   // v1.12: 绑定 filter-bar 点击
   bindFilterBar(el);
+
+  // v1.26: 启动实时计时器（有进行中卡片时）
+  startLiveTimers();
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {
@@ -929,35 +1584,79 @@ function renderFeed() {
     });
   });
 
-  // v1.13/v1.14: ✅ 打勾归档（只对 tag=todo 主卡）
-  // v1.14: archive 派生一条 progress 卡；撤销时连带删派生卡
+  // v1.26.1: 点击已过期标签 → 重设截止时间 popup
+  el.querySelectorAll('.note-due.is-overdue').forEach(badge => {
+    badge.style.cursor = 'pointer';
+    badge.addEventListener('click', e => {
+      e.stopPropagation();
+      const noteEl = badge.closest('.note');
+      if (noteEl) showReschedulePopup(noteEl.dataset.id, badge);
+    });
+  });
+
+  // v1.25: ▶️/⏸ 待办 ⇄ 进行中 切换（乐观更新 + 失败回滚）
+  el.querySelectorAll('.progress-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const noteEl = e.target.closest('.note');
+      if (!noteEl) return;
+      const id = noteEl.dataset.id;
+      const note = state.notes.find(x => x.id === id);
+      if (!note) return;
+      const prevStatus = note.status || 'todo';
+      note.status = prevStatus === 'in_progress' ? 'todo' : 'in_progress';
+      renderFeed();
+      try {
+        const res = await toggleNoteStatus(id);
+        const fresh = state.notes.find(x => x.id === id);
+        if (fresh) {
+          fresh.status = res.status;
+          fresh.total_seconds = res.total_seconds ?? fresh.total_seconds;
+          fresh.session_start_at = res.session_start_at ?? null;
+        }
+        renderFeed();
+      } catch (err) {
+        const back = state.notes.find(x => x.id === id);
+        if (back) back.status = prevStatus;
+        renderFeed();
+        toast('切换失败：' + err.message, true);
+      }
+    });
+  });
+
+  // v1.13/v1.14: ✅ todo 归档派生 progress 卡；v1.22: 所有 main 卡支持 📦 归档
   el.querySelectorAll('.archive-btn').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const noteEl = e.target.closest('.note');
       if (!noteEl) return;
       const id = noteEl.dataset.id;
-      noteEl.classList.add('archiving');  // 触发 0.3s 淡出动画
+      const note = state.notes.find(x => x.id === id);
+      const isTodo = note?.tag === 'todo';
+      noteEl.classList.add('archiving');
       try {
         const [, result] = await Promise.all([
           new Promise(r => setTimeout(r, 300)),
           archiveNote(id),
         ]);
-        const derivedId = result?.derived_note_id || null;  // v1.14
+        const derivedId = result?.derived_note_id || null;
+        invalidateFeedCache();
         await loadFeed();
         renderFeed();
         const todoistFail = result?.todoist_close && result.todoist_close.ok === false;
-        const msg = todoistFail ? '✓ 已完成（Todoist 同步失败）' : '✓ 已完成';
+        const msg = isTodo
+          ? (todoistFail ? '✓ 已完成（Todoist 同步失败）' : '✓ 已完成')
+          : '📦 已归档（可在「已完成」视图找回）';
         toast(msg, todoistFail, {
           label: '撤销',
           timeoutMs: 5000,
           onClick: async () => {
             try {
-              // 并发：还原原卡 + 删派生卡（任一失败仅 toast，另一成功也算撤销）
               await Promise.all([
                 unarchiveNote(id),
                 derivedId ? deleteNote(derivedId).catch(() => null) : Promise.resolve(),
               ]);
+              invalidateFeedCache();
               await loadFeed();
               renderFeed();
               toast('已还原');
@@ -991,11 +1690,13 @@ function renderFeed() {
       try {
         if (action === 'move') {
           await moveNote(id, targetProjectId);
+          invalidateFeedCache();
           await loadFeed();
           renderFeed();
           toast(`已移动到 ${projLabel}`);
         } else if (action === 'copy') {
           await copyNote(id, targetProjectId);
+          invalidateFeedCache();
           await loadFeed();
           renderFeed();
           toast(`已复制到 ${projLabel}`);
@@ -1014,6 +1715,7 @@ function renderFeed() {
       const id = noteEl.dataset.id;
       try {
         await unarchiveNote(id);
+        invalidateFeedCache();
         await loadFeed();
         renderFeed();
         toast('已还原');
@@ -1277,6 +1979,62 @@ async function saveChatAsKnowledge(idx) {
   }
 }
 
+// ---------- Task split modal (v1.20) ----------
+function showTaskSplitModal(tasks) {
+  return new Promise((resolve) => {
+    const modal = $('task-split-modal');
+    const list = $('task-split-list');
+    const confirmBtn = $('task-split-confirm');
+    const cancelBtn = $('task-split-cancel');
+    const dismissBtn = $('task-split-dismiss');
+    if (!modal || !list) { resolve(null); return; }
+
+    const selections = tasks.map(() => null);
+
+    function checkConfirmBtn() {
+      confirmBtn.disabled = selections.some(s => s === null);
+    }
+
+    list.innerHTML = tasks.map((title, i) => `
+      <div class="task-split-item" data-i="${i}">
+        <p class="task-split-title">${escapeHtml(title)}</p>
+        <div class="task-split-times">
+          <button class="time-chip" data-i="${i}" data-opt="today" type="button">今天</button>
+          <button class="time-chip" data-i="${i}" data-opt="tomorrow" type="button">明天</button>
+          <button class="time-chip" data-i="${i}" data-opt="thisweek" type="button">本周内</button>
+          <button class="time-chip" data-i="${i}" data-opt="nextweek" type="button">下周</button>
+        </div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('.time-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const i = parseInt(btn.dataset.i, 10);
+        list.querySelectorAll(`.time-chip[data-i="${i}"]`).forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        list.querySelector(`.task-split-item[data-i="${i}"]`).classList.add('has-time');
+        selections[i] = { content: tasks[i], due: calcTaskDueDate(btn.dataset.opt) };
+        checkConfirmBtn();
+      });
+    });
+
+    modal.hidden = false;
+    checkConfirmBtn();
+
+    const done = (result) => {
+      modal.hidden = true;
+      confirmBtn.onclick = null;
+      cancelBtn.onclick = null;
+      dismissBtn.onclick = null;
+      resolve(result);
+    };
+
+    confirmBtn.onclick = () => done(selections);
+    cancelBtn.onclick = () => done(null);
+    dismissBtn.onclick = () => done(null);
+  });
+}
+
 // ---------- AI correction diff modal ----------
 function renderCorrectDiff(before, after) {
   // Character-level LCS to highlight changed spans in the "after" text.
@@ -1521,6 +2279,18 @@ function updateComposerSpacer() {
   if (h > 0) document.documentElement.style.setProperty('--composer-h', h + 'px');
 }
 
+// v1.23 · iOS 键盘弹起时让 composer 跟随上浮
+// 用 visualViewport API 算键盘高度：layout viewport 底部 - visualViewport 底部
+// 桌面/Android 上 visualViewport 不变 → kb=0 → transform 不动
+function updateComposerPosition() {
+  if (!window.visualViewport) return;
+  const vv = window.visualViewport;
+  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  // 阈值 50px：避开 iOS 顶部地址栏隐藏/显示的小幅 viewport 抖动
+  const offset = kb > 50 ? kb : 0;
+  document.documentElement.style.setProperty('--keyboard-offset', offset + 'px');
+}
+
 function setupComposer() {
   const input = $('composer-input');
   const btn = $('composer-submit');
@@ -1536,9 +2306,22 @@ function setupComposer() {
   // Initial spacer + react to size-changing events
   setTimeout(updateComposerSpacer, 0);
   window.addEventListener('resize', updateComposerSpacer);
+  window.addEventListener('pageshow', updateComposerSpacer);
+  window.addEventListener('orientationchange', () => setTimeout(updateComposerSpacer, 250));
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', updateComposerSpacer);
+    // v1.23 · 键盘弹起/收起、地址栏伸缩都会触发 visualViewport 变化
+    window.visualViewport.addEventListener('resize', updateComposerPosition);
+    window.visualViewport.addEventListener('scroll', updateComposerPosition);
   }
+  // v1.23 · iOS 偶尔 visualViewport.resize 不及时触发，focus/blur 兜底测一次
+  input.addEventListener('focus', () => {
+    setTimeout(updateComposerPosition, 300);
+    setTimeout(updateComposerPosition, 600);
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(updateComposerPosition, 100);
+  });
   if (typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(updateComposerSpacer);
     ro.observe(document.querySelector('.composer'));
@@ -1547,22 +2330,39 @@ function setupComposer() {
   correctBtn?.addEventListener('click', async () => {
     const current = input.value.trim();
     if (!current) { toast('先输入内容', true); return; }
+
+    let projectId = state.currentTab;
+    if (projectId === 'all') {
+      projectId = await pickProject();
+      if (!projectId) return;
+    }
+
+    const proj = state.projects.find(p => p.id === projectId);
+    const projectName = proj ? proj.name : '';
+
     correctBtn.disabled = true;
     correctBtn.textContent = '…';
     try {
-      const { corrected, changed } = await correctText(current);
-      if (!changed || corrected === current) {
-        toast('AI 认为无需修改');
-      } else {
-        const ok = await showCorrectDiff(current, corrected);
-        if (ok) {
-          input.value = corrected;
-          input.style.height = 'auto';
-          input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-        }
+      const { tasks } = await splitTasks(current, projectName);
+      if (!tasks || !tasks.length) { toast('AI 未能拆解出任务', true); return; }
+      const selections = await showTaskSplitModal(tasks);
+      if (!selections) return;
+
+      let created = 0;
+      for (const { content, due } of [...selections].reverse()) {
+        const note = await postNote(projectId, content, 'todo', due);
+        state.notes.unshift(note);
+        created++;
       }
+      invalidateFeedCache();
+      input.value = '';
+      input.style.height = 'auto';
+      renderFeed();
+      updateSendBtn();
+      input.focus();
+      toast(`已创建 ${created} 张待办卡 ✅`);
     } catch (err) {
-      toast('校对失败：' + err.message, true);
+      toast('拆解失败：' + err.message, true);
     } finally {
       correctBtn.textContent = '🔍';
       updateSendBtn();
@@ -1614,6 +2414,7 @@ function setupComposer() {
     btn.disabled = true;
     try {
       const note = await postNote(projectId, content, tag);
+      invalidateFeedCache();
       state.notes.unshift(note);
       input.value = '';
       input.style.height = 'auto';
@@ -1783,6 +2584,29 @@ function setupSummarize() {
   $('sum-run')?.addEventListener('click', runSummarize);
   $('sum-save')?.addEventListener('click', saveSummaryAsCard);
   $('sum-close-result')?.addEventListener('click', closeSummarize);
+  // v1.18: "按需生成建议" 按钮，调单独的 /api/suggest 避免重跑 summary
+  $('sum-gen-suggestion')?.addEventListener('click', async () => {
+    const btn = $('sum-gen-suggestion');
+    btn.disabled = true;
+    btn.textContent = '生成中…';
+    try {
+      const data = await api('/api/suggest', {
+        method: 'POST',
+        body: JSON.stringify({ summary: lastSummary?.summary || '' }),
+        timeoutMs: LLM_TIMEOUT_MS,
+      });
+      if (data.suggestion) {
+        if (lastSummary) lastSummary.suggestion = data.suggestion;
+        $('sum-suggestion-section').hidden = false;
+        $('sum-suggestion').innerHTML = applyInlineHighlights(renderMarkdown(data.suggestion));
+        $('sum-gen-suggestion-wrap').hidden = true;
+      }
+    } catch (e) {
+      toast('建议生成失败：' + e.message, true);
+      btn.disabled = false;
+      btn.textContent = '🔮 生成下一步建议';
+    }
+  });
 }
 
 function openSummarize() {
@@ -1829,8 +2653,12 @@ async function runSummarize() {
     if (data.suggestion) {
       $('sum-suggestion-section').hidden = false;
       $('sum-suggestion').innerHTML = applyInlineHighlights(renderMarkdown(data.suggestion));
+      $('sum-gen-suggestion-wrap').hidden = true;
     } else {
       $('sum-suggestion-section').hidden = true;
+      // v1.18: 未勾选"同时生成建议"时显示按需按钮
+      const wrap = $('sum-gen-suggestion-wrap');
+      if (wrap) { wrap.hidden = false; const btn = $('sum-gen-suggestion'); if (btn) { btn.disabled = false; btn.textContent = '🔮 生成下一步建议'; } }
     }
   } catch (e) {
     $('sum-loading').hidden = true;
@@ -2193,25 +3021,63 @@ async function initApp() {
   $('app').hidden = false;
   $('btn-summary').hidden = false;
   try {
-    // 读 localStorage 的默认 tab 偏好
     const defaultTab = localStorage.getItem(DEFAULT_TAB_KEY);
     if (defaultTab && defaultTab !== 'all') state.currentTab = defaultTab;
 
-    await loadConfig();
+    // v1.18: config 和 feed 并行，省 1 个 RTT（config 完成后再验证 tab 合法性）
+    await Promise.all([loadConfig(), loadFeed()]);
 
-    // 验证 default tab 仍然合法（项目可能被删）
     if (state.currentTab !== 'all' && !state.projects.some(p => p.id === state.currentTab)) {
       state.currentTab = 'all';
     }
-
     renderTabs();
     renderSumProjects();
-    await loadFeed();
     renderFeed();
   } catch (e) {
     console.error('[init]', e);
     toast('初始化失败：' + (e.stack || e.message), true);
   }
+}
+
+// ---------- Composer scroll-hide (v1.22.5) ----------
+// 逻辑：接近底部或向上翻旧内容 → 隐藏；向下回到新内容或在顶部 → 显示
+function setupComposerScrollHide() {
+  const composer = document.querySelector('.composer');
+  if (!composer) return;
+
+  let lastY = window.scrollY;
+  let ticking = false;
+
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const y = window.scrollY;
+      const delta = y - lastY;
+      const atTop = y <= 20;
+      const viewportHeight = window.visualViewport?.height || window.innerHeight;
+      const nearBottom = y + viewportHeight >= document.documentElement.scrollHeight - 120;
+
+      if (atTop) {
+        // 在顶部（新内容区域）：始终显示
+        composer.classList.remove('composer-hidden');
+      } else if (nearBottom || delta > 6) {
+        // 接近底部 或 向上翻内容（看旧内容）：隐藏，让最后一张卡片完整露出
+        composer.classList.add('composer-hidden');
+      } else if (delta < -6) {
+        // 向下滚回（往新内容方向）：显示
+        composer.classList.remove('composer-hidden');
+      }
+
+      lastY = y;
+      ticking = false;
+    });
+  }, { passive: true });
+
+  // 点击输入框时确保显示
+  composer.addEventListener('focusin', () => {
+    composer.classList.remove('composer-hidden');
+  });
 }
 
 // ---------- Bootstrap ----------
@@ -2225,7 +3091,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupAiClickOutside();
     setupSwipeTabs();   // v1.16.8
     setupAddProject(); // v1.17
-    $('btn-refresh')?.addEventListener('click', refresh);
+    setupComposerScrollHide(); // v1.22.4
+    $('btn-refresh')?.addEventListener('click', async () => { invalidateFeedCache(); await refresh(); });
   } catch (e) {
     console.error('[setup]', e);
     toast('页面设置失败：' + e.message, true);

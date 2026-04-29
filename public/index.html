@@ -12,7 +12,7 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="icon" href="/icon-192.png">
-  <link rel="stylesheet" href="/styles.css?v=1.16.1">
+  <link rel="stylesheet" href="/styles.css?v=1.24.0">
 </head>
 <body>
 
@@ -72,30 +72,33 @@
       <p class="muted small">选一个，不能跳过</p>
       <div class="tag-buttons">
         <button class="tag-btn tag-todo" data-tag="todo" type="button">
+          <span class="tag-shortcut">1</span>
           <span class="tag-emoji">🎯</span>
           <span class="tag-name">待办</span>
           <span class="tag-desc">要做的动作 · 会自动同步到 Todoist</span>
         </button>
         <button class="tag-btn tag-progress" data-tag="progress" type="button">
+          <span class="tag-shortcut">2</span>
           <span class="tag-emoji">✅</span>
           <span class="tag-name">进展</span>
           <span class="tag-desc">已发生的事实 · 执行情况更新</span>
         </button>
         <button class="tag-btn tag-idea" data-tag="idea" type="button">
+          <span class="tag-shortcut">3</span>
           <span class="tag-emoji">💡</span>
           <span class="tag-name">想法</span>
           <span class="tag-desc">灵感 · 疑问 · 待判断的观察</span>
         </button>
         <button class="tag-btn tag-milestone" data-tag="milestone" type="button">
+          <span class="tag-shortcut">4</span>
           <span class="tag-emoji">🏁</span>
           <span class="tag-name">里程碑</span>
           <span class="tag-desc">关键节点 · AI 整理时作为叙事主线</span>
         </button>
       </div>
       <div class="tag-modal-foot">
-        <button id="tag-modal-cancel" class="ghost-btn">取消</button>
+        <button id="tag-modal-cancel" class="ghost-btn">取消 <kbd>Esc</kbd></button>
       </div>
-      <p class="muted tiny" style="text-align:center;margin-top:10px">按 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> 快速选择</p>
     </div>
   </div>
 
@@ -223,7 +226,7 @@
       <section>
         <h3>ℹ️ 关于 projectfeed</h3>
         <p class="muted tiny" style="line-height:1.9">
-          版本：<code>v1.17.0</code><br>
+          版本：<code id="app-version">v1.26.0</code><br>
           🌐 <code>feed.ai-robot.fans</code>（原 projectfeed.kevinyuanxin.workers.dev 仍可用）<br>
           📦 <code>github.com/shuyx/projectfeed</code><br>
           💾 D1 <code>projectfeed-db</code> @ APAC<br>
@@ -290,8 +293,8 @@
             <span>🧠 包含知识卡（AI 问答沉淀）</span>
           </label>
           <label class="radio-row" style="cursor:pointer">
-            <input type="checkbox" id="sum-generate-suggestion" checked>
-            <span>🔮 同时生成"下一步建议"卡</span>
+            <input type="checkbox" id="sum-generate-suggestion">
+            <span>🔮 同时生成"下一步建议"（默认关，整理后可按需生成）</span>
           </label>
           <p class="muted tiny" style="padding:0 4px;margin-top:4px">
             主卡永远纳入 · 建议卡不再参与未来整理
@@ -316,6 +319,9 @@
         <div id="sum-suggestion-section" hidden>
           <h4 style="margin:16px 0 6px;color:#b45309">🔮 下一步建议</h4>
           <div id="sum-suggestion" class="sum-body suggestion-body"></div>
+        </div>
+        <div id="sum-gen-suggestion-wrap" hidden style="margin-top:10px">
+          <button id="sum-gen-suggestion" class="ghost-btn" style="width:100%">🔮 生成下一步建议</button>
         </div>
         <div class="sum-actions">
           <button id="sum-close-result" class="ghost-btn">关闭</button>
@@ -368,11 +374,29 @@
     </div>
   </div>
 
+  <!-- Task split modal (v1.20) -->
+  <div id="task-split-modal" class="modal" hidden>
+    <div class="modal-content task-split-content">
+      <div class="settings-header">
+        <h2>🎯 任务拆解</h2>
+        <button id="task-split-cancel" class="icon-btn" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <p class="muted small">为每项任务选择执行时间，全部选完后点确认创建。</p>
+      <div id="task-split-list" class="task-split-list"></div>
+      <div class="sum-actions">
+        <button id="task-split-dismiss" class="ghost-btn">取消</button>
+        <button id="task-split-confirm" class="primary-btn" disabled>确认创建</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js?v=1.16.1').catch(() => {}); });
+      window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js?v=1.24.0').catch(() => {}); });
     }
   </script>
-  <script src="/app.js?v=1.16.1"></script>
+  <script src="/app.js?v=1.24.0"></script>
 </body>
 </html>

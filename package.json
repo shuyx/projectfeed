@@ -1,6 +1,6 @@
 {
   "name": "projectfeed",
-  "version": "0.1.0",
+  "version": "1.28.2",
   "description": "个人 Portfolio 进展跟踪 App（PWA）",
   "private": true,
   "scripts": {

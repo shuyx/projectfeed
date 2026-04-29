@@ -1,11 +1,10 @@
-// projectfeed Service Worker · build 2026-04-24 v1.17.0 (add project in settings · dynamic TODOIST_PROJECT_MAP)
+// projectfeed Service Worker · build 2026-04-26 v1.24.0 (project-board grouped view)
 // Strategy:
-//   - HTML → network-first (always fresh, fallback to cache if offline)
-//   - JS / CSS → network-first (PWA iteration phase — never stuck on stale code)
+//   - HTML / JS / CSS → network-first with 1s timeout, fallback to cache (truly fresh, no stale-while-revalidate)
 //   - Icons / manifest → cache-first (rarely change, save bandwidth)
 //   - API → network-only (no cache)
 
-const CACHE_VERSION = 'projectfeed-v3';
+const CACHE_VERSION = 'projectfeed-v29'; // bump for v1.28.2 chart full redesign
 const STATIC_ASSETS = [
   '/',
   '/app.js',
@@ -53,34 +52,32 @@ self.addEventListener('fetch', (event) => {
   // API: pass through, no caching
   if (url.pathname.startsWith('/api/')) return;
 
-  // HTML (navigation) or JS/CSS: stale-while-revalidate
-  // v1.16.4: 5G/弱网下立即返回 cache 秒开 + 后台拉新版进 cache（下次打开生效）
-  const swrCandidate =
+  // HTML (navigation) or JS/CSS: true network-first with 1s timeout fallback to cache
+  // v1.18: replaced stale-while-revalidate — users now get fresh code on every load
+  const networkFirstCandidate =
     event.request.mode === 'navigate' ||
     url.pathname === '/' ||
     isNetworkFirstAsset(url);
 
-  if (swrCandidate) {
+  if (networkFirstCandidate) {
     event.respondWith((async () => {
-      const cached = await caches.match(event.request);
-      // 后台 revalidate（不阻塞响应）
-      const networkP = fetch(event.request).then((resp) => {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 1000);
+      try {
+        const resp = await fetch(event.request, { signal: controller.signal });
+        clearTimeout(tid);
         if (resp.ok) {
           const copy = resp.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put(event.request, copy));
+          caches.open(CACHE_VERSION).then(c => c.put(event.request, copy));
         }
         return resp;
-      }).catch(() => null);
-      // 有 cache → 立即返回（秒开）
-      if (cached) {
-        networkP;  // fire-and-forget
-        return cached;
+      } catch {
+        clearTimeout(tid);
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        const root = await caches.match('/');
+        return root || new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
       }
-      // 首次访问无 cache → 等 network，失败 fallback 到根 shell
-      const fresh = await networkP;
-      if (fresh) return fresh;
-      const root = await caches.match('/');
-      return root || new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
     })());
     return;
   }

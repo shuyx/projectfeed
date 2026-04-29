@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { version as APP_VERSION } from '../package.json';
 
 const app = new Hono();
 app.use('/api/*', cors());
@@ -187,6 +188,7 @@ function filterToWhere(filter) {
     case 'feedback':   return { sql: "card_type = 'progress'", binds: [] };  // Obsidian 同步卡
     case 'summary':    return { sql: "card_type IN ('summary','suggestion')", binds: [] };
     case 'archived':   return { sql: 'archived = 1', binds: [] };  // v1.13 · 已完成视图
+    case 'due-board':  return { sql: "tag IN ('todo','milestone') AND due_at IS NOT NULL AND card_type = 'main'", binds: [] };  // v1.24 · 项目分组视图（仅有截止时间的 todo/milestone）
     default: return null;
   }
 }
@@ -271,7 +273,7 @@ app.get('/api/config', async (c) => {
   const projects = await c.env.DB.prepare(
     'SELECT * FROM projects ORDER BY sort_order ASC'
   ).all();
-  return c.json({ projects: projects.results || [] });
+  return c.json({ projects: projects.results || [], version: APP_VERSION });
 });
 
 // v1.17 · 新增项目（原子化：先调 Todoist 建 project 成功，再 INSERT 本地）
@@ -378,8 +380,9 @@ app.get('/api/notes', async (c) => {
   }
   if (before) { where.push('created_at < ?'); binds.push(before); }
   // v1.15: filter=todo 时按截止时间排序（紧迫在前，无时间的排最后）
+  // v1.25: 进行中（status='in_progress'）置顶
   const orderBy = filter === 'todo'
-    ? 'ORDER BY (due_at IS NULL) ASC, due_at ASC, created_at DESC'
+    ? "ORDER BY CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END ASC, (due_at IS NULL) ASC, due_at ASC, created_at DESC"
     : 'ORDER BY created_at DESC';
   const sql = `SELECT * FROM notes WHERE ${where.join(' AND ')} ${orderBy} LIMIT ?`;
   binds.push(limit);
@@ -438,10 +441,10 @@ app.post('/api/notes', async (c) => {
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
 
-  // v1.15: todo 卡自动抽取 due_at（中文时间表达 → ISO +08:00）
+  // v1.15: todo 卡自动抽取 due_at；v1.20: 接受前端显式传入 due_at（任务拆解流程）
   let due_at = null;
   if (card_type === 'main' && tag === 'todo') {
-    due_at = parseChineseDatetime(content);
+    due_at = body.due_at || parseChineseDatetime(content);
   }
 
   await c.env.DB.prepare(
@@ -542,14 +545,28 @@ app.post('/api/notes/:id/copy', async (c) => {
 app.post('/api/notes/:id/archive', async (c) => {
   const id = c.req.param('id');
   const note = await c.env.DB.prepare(
-    "SELECT id, project_id, content, card_type, tag, todoist_task_id, archived FROM notes WHERE id = ?"
+    "SELECT id, project_id, content, card_type, tag, todoist_task_id, archived, total_seconds, session_start_at FROM notes WHERE id = ?"
   ).bind(id).first();
   if (!note) return c.json({ error: 'not found' }, 404);
   if (note.archived) return c.json({ error: 'already archived' }, 409);
 
   const archivedAt = new Date().toISOString();
-  await c.env.DB.prepare('UPDATE notes SET archived = 1, archived_at = ? WHERE id = ?')
-    .bind(archivedAt, id).run();
+  // v1.26: 完成时关闭正在计时的 session，汇总最终用时
+  let finalSeconds = note.total_seconds || 0;
+  if (note.session_start_at) {
+    const elapsed = Math.floor((new Date(archivedAt) - new Date(note.session_start_at)) / 1000);
+    const safe = Math.max(0, elapsed);
+    finalSeconds += safe;
+    // v1.28: 写入 session 日志
+    if (safe > 0) {
+      await c.env.DB.prepare(
+        'INSERT INTO time_sessions (id, note_id, project_id, started_at, ended_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(crypto.randomUUID(), id, note.project_id, note.session_start_at, archivedAt, safe).run();
+    }
+  }
+  await c.env.DB.prepare(
+    'UPDATE notes SET archived = 1, archived_at = ?, total_seconds = ?, session_start_at = NULL WHERE id = ?'
+  ).bind(archivedAt, finalSeconds, id).run();
 
   // v1.14: 打勾完成的 todo 卡派生一条 progress 卡，体现"进度推进"语义
   // 原卡保留在归档视图（可还原），派生卡进入时间流作为已完成进展
@@ -589,6 +606,246 @@ app.post('/api/notes/:id/unarchive', async (c) => {
   if (!note.archived) return c.json({ error: 'not archived' }, 409);
   await c.env.DB.prepare('UPDATE notes SET archived = 0, archived_at = NULL WHERE id = ?').bind(id).run();
   return c.json({ id, archived: false });
+});
+
+// v1.25 · 待办卡 ⇄ 进行中 状态切换
+// v1.26: 同步计时 — 开始时记 session_start_at，暂停时累加 total_seconds
+app.post('/api/notes/:id/toggle-status', async (c) => {
+  const id = c.req.param('id');
+  const note = await c.env.DB.prepare(
+    'SELECT id, project_id, tag, card_type, archived, status, total_seconds, session_start_at FROM notes WHERE id = ?'
+  ).bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  if (note.tag !== 'todo' || note.card_type !== 'main') {
+    return c.json({ error: 'only todo main cards support status toggle' }, 400);
+  }
+  if (note.archived) return c.json({ error: 'cannot toggle archived card' }, 409);
+
+  const now = new Date().toISOString();
+  const current = note.status || 'todo';
+  const next = current === 'in_progress' ? 'todo' : 'in_progress';
+
+  let newTotalSeconds = note.total_seconds || 0;
+  let newSessionStart = null;
+  if (next === 'in_progress') {
+    newSessionStart = now;
+  } else if (note.session_start_at) {
+    const elapsed = Math.floor((new Date(now) - new Date(note.session_start_at)) / 1000);
+    const safe = Math.max(0, elapsed);
+    newTotalSeconds += safe;
+    // v1.28: 写入 session 日志供图表聚合
+    if (safe > 0) {
+      await c.env.DB.prepare(
+        'INSERT INTO time_sessions (id, note_id, project_id, started_at, ended_at, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(crypto.randomUUID(), id, note.project_id, note.session_start_at, now, safe).run();
+    }
+  }
+
+  await c.env.DB.prepare(
+    'UPDATE notes SET status = ?, updated_at = ?, total_seconds = ?, session_start_at = ? WHERE id = ?'
+  ).bind(next, now, newTotalSeconds, newSessionStart, id).run();
+  return c.json({ id, status: next, updated_at: now, total_seconds: newTotalSeconds, session_start_at: newSessionStart });
+});
+
+// v1.26.1 · 过期任务重设截止时间
+app.post('/api/notes/:id/reschedule', async (c) => {
+  const id = c.req.param('id');
+  const { due_at } = await c.req.json().catch(() => ({}));
+  if (!due_at) return c.json({ error: 'due_at required' }, 400);
+  const note = await c.env.DB.prepare('SELECT id FROM notes WHERE id = ?').bind(id).first();
+  if (!note) return c.json({ error: 'not found' }, 404);
+  const updated_at = new Date().toISOString();
+  await c.env.DB.prepare('UPDATE notes SET due_at = ?, updated_at = ?, status = ? WHERE id = ?')
+    .bind(due_at, updated_at, 'todo', id).run();
+  return c.json({ id, due_at, updated_at });
+});
+
+// v1.28 · 图表用时数据（按日期 × 项目聚合，UTC+8）
+app.get('/api/stats/time-chart', async (c) => {
+  const period  = c.req.query('period')  || 'week'; // today|week|month|3month|year
+  const project = c.req.query('project') || 'all';  // all|<project_id>
+  const nowTs   = Date.now();
+  const cstDay  = (ts) => new Date(ts + 8 * 3600000).toISOString().slice(0, 10);
+  const todayCST = cstDay(nowTs);
+
+  // 周期 → 天数 / 分组粒度
+  const PERIOD_DAYS = { today: 1, week: 7, month: 30, '3month': 90, year: 365 };
+  const days = PERIOD_DAYS[period] || 7;
+  const cutoffTs = nowTs - days * 86400000;
+  const cutoff = new Date(cutoffTs).toISOString();
+
+  // 项目过滤 WHERE 片段
+  const projFilter = project !== 'all' ? `AND project_id = '${project.replace(/'/g, "''")}'` : '';
+
+  // ① time_sessions（精确：v1.28+ 记录的）
+  let sessRows = [];
+  try {
+    sessRows = (await c.env.DB.prepare(`
+      SELECT date(datetime(ended_at, '+8 hours')) AS day,
+             project_id, note_id, SUM(duration_seconds) AS seconds
+      FROM time_sessions
+      WHERE ended_at >= ? ${projFilter}
+      GROUP BY day, project_id, note_id
+    `).bind(cutoff).all()).results || [];
+  } catch (_) {}
+
+  // ② 遗留数据：notes.total_seconds（不依赖 time_sessions 表是否存在）
+  // 当 time_sessions 积累足够后可能轻微重复计算，但量级可忽略
+  let legacyRows = [];
+  try {
+    legacyRows = (await c.env.DB.prepare(`
+      SELECT
+        COALESCE(date(datetime(archived_at, '+8 hours')),
+                 date(datetime(updated_at,  '+8 hours')), ?) AS day,
+        project_id, id AS note_id, total_seconds AS seconds
+      FROM notes
+      WHERE card_type = 'main' AND tag = 'todo'
+        AND total_seconds > 0 AND session_start_at IS NULL
+        ${projFilter}
+    `).bind(todayCST).all()).results || [];
+  } catch (_) {}
+
+  // ③ 当前正在计时（实时 elapsed）
+  const activeRows = (await c.env.DB.prepare(
+    `SELECT project_id, id AS note_id, session_start_at FROM notes
+     WHERE session_start_at IS NOT NULL AND card_type='main' AND tag='todo' ${projFilter}`
+  ).all()).results || [];
+
+  // 合并：byDay[day][project_id] = seconds
+  const byDay = {};
+  const noteSeconds = {}; // note_id → seconds（用于任务明细）
+  const addRow = (day, pid, nid, secs) => {
+    if (!day || secs <= 0) return;
+    (byDay[day] ||= {})[pid] = ((byDay[day][pid] || 0)) + secs;
+    if (nid) noteSeconds[nid] = (noteSeconds[nid] || 0) + secs;
+  };
+  for (const r of sessRows)   addRow(r.day, r.project_id, r.note_id, r.seconds);
+  for (const r of legacyRows) addRow(r.day, r.project_id, r.note_id, r.seconds);
+  for (const a of activeRows) {
+    const elapsed = Math.floor((nowTs - new Date(a.session_start_at).getTime()) / 1000);
+    addRow(todayCST, a.project_id, a.note_id, elapsed);
+  }
+
+  // 生成日期标签（连续）
+  const dateLabels = [];
+  for (let i = days - 1; i >= 0; i--)
+    dateLabels.push(cstDay(nowTs - i * 86400000));
+
+  // 分组聚合（year→月, 3month→周, 其余→日）
+  let labels, groupedByDay;
+  if (period === 'year') {
+    // 按月聚合
+    const byMonth = {};
+    for (const [d, pmap] of Object.entries(byDay)) {
+      const m = d.slice(0, 7);
+      for (const [pid, s] of Object.entries(pmap))
+        ((byMonth[m] ||= {})[pid] = (byMonth[m][pid] || 0) + s);
+    }
+    const months = [...new Set(dateLabels.map(d => d.slice(0, 7)))];
+    labels = months.map(m => m.slice(5) + '月');
+    groupedByDay = Object.fromEntries(months.map((m, i) => [labels[i], byMonth[m] || {}]));
+  } else if (period === '3month') {
+    // 按周聚合（ISO 周一起）
+    const byWeek = {};
+    for (const [d, pmap] of Object.entries(byDay)) {
+      const dt = new Date(d + 'T12:00:00+08:00');
+      const mon = new Date(dt); mon.setDate(dt.getDate() - (dt.getDay() || 7) + 1);
+      const wk = mon.toISOString().slice(0, 10);
+      for (const [pid, s] of Object.entries(pmap))
+        ((byWeek[wk] ||= {})[pid] = (byWeek[wk][pid] || 0) + s);
+    }
+    const weeks = [...new Set(dateLabels.map(d => {
+      const dt = new Date(d + 'T12:00:00+08:00');
+      const mon = new Date(dt); mon.setDate(dt.getDate() - (dt.getDay() || 7) + 1);
+      return mon.toISOString().slice(0, 10);
+    }))];
+    labels = weeks.map(w => w.slice(5).replace('-', '/'));
+    groupedByDay = Object.fromEntries(weeks.map((w, i) => [labels[i], byWeek[w] || {}]));
+  } else {
+    labels = dateLabels;
+    groupedByDay = byDay;
+  }
+
+  // 项目信息
+  const allProjects = (await c.env.DB.prepare('SELECT id, name, emoji, sort_order FROM projects ORDER BY sort_order').all()).results || [];
+  const projMap = Object.fromEntries(allProjects.map(p => [p.id, { name: p.name, emoji: p.emoji || '📁' }]));
+
+  // 涉及的项目 & 总用时
+  const usedPids = [...new Set([
+    ...sessRows.map(r => r.project_id),
+    ...legacyRows.map(r => r.project_id),
+    ...activeRows.map(r => r.project_id),
+  ])];
+  const projectTotals = {};
+  for (const pid of usedPids) {
+    projectTotals[pid] = Object.values(byDay).reduce((s, pmap) => s + (pmap[pid] || 0), 0);
+  }
+
+  // 任务明细（单项目模式）
+  let tasks = [];
+  if (project !== 'all' && Object.keys(noteSeconds).length) {
+    const nids = Object.keys(noteSeconds).slice(0, 30);
+    const ph = nids.map(() => '?').join(',');
+    const notesInfo = (await c.env.DB.prepare(
+      `SELECT id, content FROM notes WHERE id IN (${ph})`
+    ).bind(...nids).all()).results || [];
+    tasks = notesInfo
+      .map(n => ({ id: n.id, content: n.content, seconds: noteSeconds[n.id] || 0 }))
+      .sort((a, b) => b.seconds - a.seconds);
+  }
+
+  return c.json({ period, labels, groupedByDay, projectTotals, projects: projMap, allProjects, tasks });
+});
+
+// v1.26 · 用时统计（按项目分组，仅 tag=todo 有计时记录的卡）
+app.get('/api/stats/time', async (c) => {
+  const period = c.req.query('period') || 'all';
+  let extra = '';
+  const binds = [];
+  if (period === 'week') {
+    extra = " AND (n.archived_at >= ? OR n.archived = 0)";
+    binds.push(new Date(Date.now() - 7 * 86400000).toISOString());
+  } else if (period === 'month') {
+    extra = " AND (n.archived_at >= ? OR n.archived = 0)";
+    binds.push(new Date(Date.now() - 30 * 86400000).toISOString());
+  }
+  const sql = `
+    SELECT n.id, n.project_id, n.content, n.total_seconds, n.session_start_at,
+           n.status, n.archived, n.archived_at, n.created_at,
+           p.name as project_name, p.emoji as project_emoji, p.sort_order
+    FROM notes n
+    LEFT JOIN projects p ON n.project_id = p.id
+    WHERE n.card_type = 'main' AND n.tag = 'todo'
+      AND (n.total_seconds > 0 OR n.session_start_at IS NOT NULL)
+      ${extra}
+    ORDER BY p.sort_order ASC, n.total_seconds DESC, n.created_at DESC
+  `;
+  const rows = (await c.env.DB.prepare(sql).bind(...binds).all()).results || [];
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.project_id]) {
+      map[r.project_id] = {
+        project_id: r.project_id,
+        project_name: r.project_name || r.project_id,
+        project_emoji: r.project_emoji || '📁',
+        sort_order: r.sort_order ?? 999,
+        total_seconds: 0,
+        tasks: [],
+      };
+    }
+    map[r.project_id].total_seconds += r.total_seconds || 0;
+    map[r.project_id].tasks.push({
+      id: r.id,
+      content: r.content,
+      total_seconds: r.total_seconds || 0,
+      session_start_at: r.session_start_at || null,
+      status: r.status || 'todo',
+      archived: r.archived,
+      archived_at: r.archived_at,
+    });
+  }
+  const projects = Object.values(map).sort((a, b) => b.total_seconds - a.total_seconds);
+  return c.json({ projects, period });
 });
 
 // 重试 Todoist 同步（卡片上的 ⚠️ 失败重试按钮调这个）
@@ -793,6 +1050,43 @@ ${text}`;
     return c.json({ corrected: corrected || text, changed });
   } catch (e) {
     return c.json({ error: e.message || 'LLM 调用异常' }, 502);
+  }
+});
+
+// ============================================================
+// AI: split tasks (v1.21 — GTD coach persona + physical-action constraints)
+// ============================================================
+
+app.post('/api/ai/split-tasks', async (c) => {
+  const { text, project_name } = await c.req.json().catch(() => ({}));
+  if (!text?.trim()) return c.json({ error: 'text required' }, 400);
+  if (text.length > 3000) return c.json({ error: '文本过长（>3000 字）' }, 400);
+
+  const system = `你是一位有10年经验的GTD执行教练，专门帮助项目经理把混乱输入转为可立即行动的任务清单。
+你的拆解原则：
+1. 每条任务必须以具体动词开头，代表一个「下一步物理行动」——做完它，事情就向前推进
+2. 3-6条为宜；一件简单的事不要为拆解而拆解
+3. 禁止使用以下模糊动词作为开头：了解、研究、考虑、评估、跟进、关注、确认思路（若无法避免，必须在动词后补充具体的行动对象和完成标准）
+4. 任务之间保持独立，不要有隐含的依赖序列
+5. 只输出JSON数组，不加任何解释`;
+
+  const projectLine = project_name ? `项目背景：${project_name}\n\n` : '';
+  const user = `${projectLine}待拆解的内容：
+${text}
+
+请输出格式：["任务1", "任务2", "任务3"]`;
+
+  try {
+    const raw = await callLLM(c, { system, user, temperature: 0.3, max_tokens: 800 });
+    const match = String(raw).match(/\[[\s\S]*?\]/);
+    if (!match) return c.json({ error: 'LLM 返回格式错误' }, 500);
+    let tasks;
+    try { tasks = JSON.parse(match[0]); }
+    catch { return c.json({ error: '解析失败' }, 500); }
+    if (!Array.isArray(tasks)) return c.json({ error: '非数组' }, 500);
+    return c.json({ tasks: tasks.filter(t => typeof t === 'string' && t.trim()) });
+  } catch (e) {
+    return c.json({ error: e.message || '拆解失败' }, 502);
   }
 });
 
