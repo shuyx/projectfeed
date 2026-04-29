@@ -10,9 +10,9 @@ binding = "ASSETS"
 run_worker_first = true
 
 [vars]
-# MiniMax 国际版 API（Key 通过 wrangler secret put MINIMAX_API_KEY 设置）
-MINIMAX_BASE_URL = "https://api.minimaxi.com/v1/text/chatcompletion_v2"
-MINIMAX_MODEL = "MiniMax-M2.7-highspeed"
+# DeepSeek API（Key 通过 wrangler secret put DEEPSEEK_API_KEY 设置）
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 [[d1_databases]]
 binding = "DB"

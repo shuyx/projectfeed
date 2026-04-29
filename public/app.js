@@ -32,9 +32,10 @@ const state = {
   searchQuery: '',   // v1.11 · 搜索关键词，非空时 loadFeed 走 q 查询
   activeFilter: '',  // v1.12 · '' | 'todo' | 'progress' | 'idea' | 'milestone' | 'feedback' | 'summary' | 'time'
   viewMode: (typeof localStorage !== 'undefined' && localStorage.getItem('pf-view-mode') === 'timeline') ? 'timeline' : 'project',  // v1.27 · 默认项目分组，仅在「全部」tab 生效
-  timePeriod: 'all',     // v1.26 · 用时统计周期
-  timeView: 'list',      // v1.28 · 'list' | 'chart'
+  timePeriod: 'all',       // v1.26 · 用时统计周期
+  timeView: 'list',        // v1.28 · 'list' | 'chart'
   timeChartPeriod: 'week', // v1.28 · 图表周期
+  expandedStacks: new Set(), // v1.30 · 已展开的项目堆叠（project_id 集合）
 };
 
 // ---------- Feed Cache ----------
@@ -1650,25 +1651,87 @@ function renderFeed() {
       return { proj: projectMap[pid], notes: ns };
     }).sort((a, b) => (a.proj?.sort_order ?? 999) - (b.proj?.sort_order ?? 999));
 
-    groups = projectGroups.map(pg => ({
-      cls: 'project-section',
-      headerHtml: `<header class="project-section-head">
-        <span class="proj-emoji">${pg.proj?.emoji || '📁'}</span>
-        <span class="proj-name">${escapeHtml(pg.proj?.name || '未知项目')}</span>
-        <span class="proj-count">${pg.notes.length}</span>
-      </header>`,
-      notes: pg.notes,
-    }));
+    // v1.30.2: 任意 filter 激活时启用堆叠（仅「全部」tab）
+    const stackMode = !!state.activeFilter;
+    // 进展 filter 时把 milestone 拆出独立堆叠
+    const splitMilestone = state.activeFilter === 'progress';
+
+    groups = [];
+    for (const pg of projectGroups) {
+      const pid = pg.proj?.id || 'unknown';
+      const projHeaderBase = `<span class="proj-emoji">${pg.proj?.emoji || '📁'}</span>
+        <span class="proj-name">${escapeHtml(pg.proj?.name || '未知项目')}</span>`;
+
+      // 拆分 notes 成多组（默认一组；progress filter 拆 progress / milestone）
+      let subgroups;
+      if (splitMilestone) {
+        const progressOnly = pg.notes.filter(n => n.tag === 'progress');
+        const milestoneOnly = pg.notes.filter(n => n.tag === 'milestone');
+        subgroups = [];
+        if (progressOnly.length) subgroups.push({ key: 'progress', label: '✅ 进展', notes: progressOnly });
+        if (milestoneOnly.length) subgroups.push({ key: 'milestone', label: '🏁 里程碑', notes: milestoneOnly });
+      } else {
+        subgroups = [{ key: '_', label: '', notes: pg.notes }];
+      }
+
+      // 第一个 subgroup 用项目 header，后续 subgroup 用紧凑的 sub-header
+      subgroups.forEach((sg, sgIdx) => {
+        const stackKey = `${pid}::${sg.key}`;
+        const isStack    = stackMode && sg.notes.length > 1;
+        const isExpanded = state.expandedStacks.has(stackKey);
+        const visibleNotes = (isStack && !isExpanded) ? [sg.notes[0]] : sg.notes;
+        const hiddenCount  = (isStack && !isExpanded) ? sg.notes.length - 1 : 0;
+
+        let headerHtml;
+        const expandBtnHtml = isStack && !isExpanded
+          ? `<button class="stack-header-btn expand" data-stack-key="${escapeHtml(stackKey)}">▼ ${hiddenCount} 项隐藏</button>`
+          : '';
+        const collapseBtnHtml = isStack && isExpanded
+          ? `<button class="stack-header-btn collapse" data-stack-key="${escapeHtml(stackKey)}">▲ 收起</button>`
+          : '';
+
+        if (sgIdx === 0) {
+          headerHtml = `<header class="project-section-head">
+            ${projHeaderBase}
+            ${sg.label ? `<span class="proj-sub-label">${sg.label}</span>` : ''}
+            <span class="proj-count">${sg.notes.length}</span>
+            ${expandBtnHtml}${collapseBtnHtml}
+          </header>`;
+        } else {
+          headerHtml = `<header class="project-section-head sub-section-head">
+            <span class="proj-sub-label">${sg.label}</span>
+            <span class="proj-count">${sg.notes.length}</span>
+            ${expandBtnHtml}${collapseBtnHtml}
+          </header>`;
+        }
+
+        groups.push({
+          cls: 'project-section',
+          projId: stackKey,
+          isStack, isExpanded, hiddenCount,
+          headerHtml,
+          notes: visibleNotes,
+        });
+      });
+    }
   } else {
     groups = state.activeFilter === 'todo'
       ? [{ label: '⏰ 按截止时间排序', notes: regularNotes }]
       : groupNotesByDate(regularNotes);
   }
 
-  const groupsHtml = groups.map(g => `
+  const groupsHtml = groups.map(g => {
+    const isStackCollapsed = g.isStack && !g.isExpanded;
+    // v1.30.2: peek 仅渲染纯视觉层叠效果，触发改用 header 按钮
+    const peekHtml = g.hiddenCount > 0 ? `
+      <div class="card-stack-peek card-stack-peek-1"></div>
+      ${g.hiddenCount > 1 ? '<div class="card-stack-peek card-stack-peek-2"></div>' : ''}` : '';
+
+    return `
     <div class="${g.cls || 'date-group'}">
       ${g.headerHtml || `<div class="date-divider">${escapeHtml(g.label)}</div>`}
-      ${g.notes.map(n => {
+      <div class="${isStackCollapsed ? 'card-stack-wrap' : ''}">
+      ${g.notes.map((n, _ni) => {
         const proj = projectMap[n.project_id];
         const projLabel = proj ? `${proj.emoji ? proj.emoji + ' ' : ''}${escapeHtml(proj.name)}` : escapeHtml(n.project_id);
         const isSummary = n.card_type === 'summary';
@@ -1795,8 +1858,10 @@ function renderFeed() {
           ${knowledgeHtml}
         `;
       }).join('')}
+      ${peekHtml}
+      </div>
     </div>
-  `).join('');
+  `;}).join('');
 
   const sentinel = state.hasMore ? '<div id="feed-sentinel" class="feed-sentinel"><span class="spinner"></span> 加载更多…</div>' : '';
 
@@ -1810,6 +1875,17 @@ function renderFeed() {
 
   // v1.26: 启动实时计时器（有进行中卡片时）
   startLiveTimers();
+
+  // v1.30.2: 堆叠展开 / 收起（统一 stack-header-btn 触发）
+  el.querySelectorAll('.stack-header-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const key = btn.dataset.stackKey;
+      if (btn.classList.contains('expand')) state.expandedStacks.add(key);
+      else state.expandedStacks.delete(key);
+      renderFeed();
+    });
+  });
 
   // Delete main card
   el.querySelectorAll('.note .delete-btn').forEach(btn => {
